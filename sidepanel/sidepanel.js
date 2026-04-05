@@ -1,18 +1,24 @@
 // sidepanel/sidepanel.js — Side Panel logic
 
 const STATUS_ICONS = {
-  pending: '\u2B1A',    // ⬚
-  running: '\u23F3',    // ⏳
-  completed: '\u2705',  // ✅
-  failed: '\u274C',     // ❌
+  pending: '',
+  running: '',
+  completed: '\u2713',  // ✓
+  failed: '\u2717',     // ✗
 };
 
 const logArea = document.getElementById('log-area');
 const displayOauthUrl = document.getElementById('display-oauth-url');
 const displayLocalhostUrl = document.getElementById('display-localhost-url');
 const displayStatus = document.getElementById('display-status');
+const statusBar = document.getElementById('status-bar');
 const inputEmail = document.getElementById('input-email');
 const btnReset = document.getElementById('btn-reset');
+const stepsProgress = document.getElementById('steps-progress');
+const btnAutoRun = document.getElementById('btn-auto-run');
+const btnAutoContinue = document.getElementById('btn-auto-continue');
+const autoContinueBar = document.getElementById('auto-continue-bar');
+const btnClearLog = document.getElementById('btn-clear-log');
 
 // ============================================================
 // State Restore on load
@@ -22,7 +28,6 @@ async function restoreState() {
   try {
     const state = await chrome.runtime.sendMessage({ type: 'GET_STATE', source: 'sidepanel' });
 
-    // Restore data fields
     if (state.oauthUrl) {
       displayOauthUrl.textContent = state.oauthUrl;
       displayOauthUrl.classList.add('has-value');
@@ -35,14 +40,12 @@ async function restoreState() {
       inputEmail.value = state.email;
     }
 
-    // Restore step statuses
     if (state.stepStatuses) {
       for (const [step, status] of Object.entries(state.stepStatuses)) {
         updateStepUI(Number(step), status);
       }
     }
 
-    // Restore logs
     if (state.logs) {
       for (const entry of state.logs) {
         appendLog(entry);
@@ -50,6 +53,7 @@ async function restoreState() {
     }
 
     updateStatusDisplay(state);
+    updateProgressCounter();
   } catch (err) {
     console.error('Failed to restore state:', err);
   }
@@ -61,23 +65,36 @@ async function restoreState() {
 
 function updateStepUI(step, status) {
   const statusEl = document.querySelector(`.step-status[data-step="${step}"]`);
-  if (statusEl) statusEl.textContent = STATUS_ICONS[status] || '\u2B1A';
+  const row = document.querySelector(`.step-row[data-step="${step}"]`);
+  const indicator = document.querySelector(`.step-indicator[data-step="${step}"]`);
 
-  // Interlock logic
+  if (statusEl) statusEl.textContent = STATUS_ICONS[status] || '';
+  if (row) {
+    row.className = `step-row ${status}`;
+  }
+
   updateButtonStates();
+  updateProgressCounter();
+}
+
+function updateProgressCounter() {
+  let completed = 0;
+  document.querySelectorAll('.step-row').forEach(row => {
+    if (row.classList.contains('completed')) completed++;
+  });
+  stepsProgress.textContent = `${completed} / 9`;
 }
 
 function updateButtonStates() {
-  // Get all current statuses from DOM
   const statuses = {};
-  document.querySelectorAll('.step-status').forEach(el => {
-    const step = Number(el.dataset.step);
-    const icon = el.textContent;
-    const status = Object.entries(STATUS_ICONS).find(([, v]) => v === icon)?.[0] || 'pending';
-    statuses[step] = status;
+  document.querySelectorAll('.step-row').forEach(row => {
+    const step = Number(row.dataset.step);
+    if (row.classList.contains('completed')) statuses[step] = 'completed';
+    else if (row.classList.contains('running')) statuses[step] = 'running';
+    else if (row.classList.contains('failed')) statuses[step] = 'failed';
+    else statuses[step] = 'pending';
   });
 
-  // Find if any step is running
   const anyRunning = Object.values(statuses).some(s => s === 'running');
 
   for (let step = 1; step <= 9; step++) {
@@ -85,13 +102,10 @@ function updateButtonStates() {
     if (!btn) continue;
 
     if (anyRunning) {
-      // When any step is running, disable all buttons
       btn.disabled = true;
     } else if (step === 1) {
-      // Step 1 is always available (unless running)
       btn.disabled = false;
     } else {
-      // Steps 2-9: enabled if previous step completed (or current step failed for retry)
       const prevStatus = statuses[step - 1];
       const currentStatus = statuses[step];
       btn.disabled = !(prevStatus === 'completed' || currentStatus === 'failed' || currentStatus === 'completed');
@@ -101,45 +115,53 @@ function updateButtonStates() {
 
 function updateStatusDisplay(state) {
   if (!state || !state.stepStatuses) return;
+
+  statusBar.className = 'status-bar';
+
   const running = Object.entries(state.stepStatuses).find(([, s]) => s === 'running');
   if (running) {
     displayStatus.textContent = `Step ${running[0]} running...`;
-    displayStatus.classList.add('has-value');
+    statusBar.classList.add('running');
+    return;
+  }
+
+  const failed = Object.entries(state.stepStatuses).find(([, s]) => s === 'failed');
+  if (failed) {
+    displayStatus.textContent = `Step ${failed[0]} failed`;
+    statusBar.classList.add('failed');
+    return;
+  }
+
+  const lastCompleted = Object.entries(state.stepStatuses)
+    .filter(([, s]) => s === 'completed')
+    .map(([k]) => Number(k))
+    .sort((a, b) => b - a)[0];
+
+  if (lastCompleted === 9) {
+    displayStatus.textContent = 'All steps completed!';
+    statusBar.classList.add('completed');
+  } else if (lastCompleted) {
+    displayStatus.textContent = `Step ${lastCompleted} done`;
   } else {
-    const lastCompleted = Object.entries(state.stepStatuses)
-      .filter(([, s]) => s === 'completed')
-      .map(([k]) => Number(k))
-      .sort((a, b) => b - a)[0];
-    if (lastCompleted === 9) {
-      displayStatus.textContent = 'All steps completed!';
-      displayStatus.classList.add('has-value');
-    } else if (lastCompleted) {
-      displayStatus.textContent = `Step ${lastCompleted} done. Ready for step ${lastCompleted + 1}.`;
-      displayStatus.classList.add('has-value');
-    } else {
-      displayStatus.textContent = 'Waiting';
-      displayStatus.classList.remove('has-value');
-    }
+    displayStatus.textContent = 'Ready';
   }
 }
 
 function appendLog(entry) {
   const time = new Date(entry.timestamp).toLocaleTimeString('en-US', { hour12: false });
-  const levelLabel = entry.level.toUpperCase().padEnd(5);
+  const levelLabel = entry.level.toUpperCase();
   const line = document.createElement('div');
-  line.className = `log-${entry.level}`;
+  line.className = `log-line log-${entry.level}`;
 
-  // Extract step number from message (e.g., "Step 4: ..." or "[vps-panel] Step 1: ...")
   const stepMatch = entry.message.match(/Step (\d)/);
   const stepNum = stepMatch ? stepMatch[1] : null;
 
-  // Build rich HTML
   let html = `<span class="log-time">${time}</span> `;
-  html += `<span class="log-level log-level-${entry.level}">[${levelLabel}]</span> `;
+  html += `<span class="log-level log-level-${entry.level}">${levelLabel}</span> `;
   if (stepNum) {
     html += `<span class="log-step-tag step-${stepNum}">S${stepNum}</span>`;
   }
-  html += `<span>${escapeHtml(entry.message)}</span>`;
+  html += `<span class="log-msg">${escapeHtml(entry.message)}</span>`;
 
   line.innerHTML = html;
   logArea.appendChild(line);
@@ -159,37 +181,23 @@ function escapeHtml(text) {
 document.querySelectorAll('.step-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     const step = Number(btn.dataset.step);
-
-    // Save email if step 3 and email input has value
     if (step === 3) {
       const email = inputEmail.value.trim();
       if (!email) {
         appendLog({ message: 'Please paste email address first', level: 'error', timestamp: Date.now() });
         return;
       }
-      await chrome.runtime.sendMessage({
-        type: 'EXECUTE_STEP',
-        source: 'sidepanel',
-        payload: { step, email },
-      });
+      await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step, email } });
     } else {
-      await chrome.runtime.sendMessage({
-        type: 'EXECUTE_STEP',
-        source: 'sidepanel',
-        payload: { step },
-      });
+      await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step } });
     }
   });
 });
 
-// Auto Run button
-const btnAutoRun = document.getElementById('btn-auto-run');
-const btnAutoContinue = document.getElementById('btn-auto-continue');
-const autoContinueBar = document.getElementById('auto-continue-bar');
-
+// Auto Run
 btnAutoRun.addEventListener('click', async () => {
   btnAutoRun.disabled = true;
-  btnAutoRun.textContent = 'Running...';
+  btnAutoRun.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> Running...';
   await chrome.runtime.sendMessage({ type: 'AUTO_RUN', source: 'sidepanel' });
 });
 
@@ -200,44 +208,41 @@ btnAutoContinue.addEventListener('click', async () => {
     return;
   }
   autoContinueBar.style.display = 'none';
-  btnAutoRun.textContent = 'Running...';
-  await chrome.runtime.sendMessage({
-    type: 'RESUME_AUTO_RUN',
-    source: 'sidepanel',
-    payload: { email },
-  });
+  await chrome.runtime.sendMessage({ type: 'RESUME_AUTO_RUN', source: 'sidepanel', payload: { email } });
 });
 
-// Reset button
+// Reset
 btnReset.addEventListener('click', async () => {
   if (confirm('Reset all steps and data?')) {
     await chrome.runtime.sendMessage({ type: 'RESET', source: 'sidepanel' });
-    // Clear UI
-    displayOauthUrl.textContent = 'Not obtained';
+    displayOauthUrl.textContent = 'Waiting...';
     displayOauthUrl.classList.remove('has-value');
-    displayLocalhostUrl.textContent = 'Not captured';
+    displayLocalhostUrl.textContent = 'Waiting...';
     displayLocalhostUrl.classList.remove('has-value');
     inputEmail.value = '';
-    displayStatus.textContent = 'Waiting';
-    displayStatus.classList.remove('has-value');
+    displayStatus.textContent = 'Ready';
+    statusBar.className = 'status-bar';
     logArea.innerHTML = '';
-    document.querySelectorAll('.step-status').forEach(el => el.textContent = '\u2B1A');
+    document.querySelectorAll('.step-row').forEach(row => row.className = 'step-row');
+    document.querySelectorAll('.step-status').forEach(el => el.textContent = '');
     btnAutoRun.disabled = false;
-    btnAutoRun.textContent = 'Auto Run';
+    btnAutoRun.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> Auto';
     autoContinueBar.style.display = 'none';
     updateButtonStates();
+    updateProgressCounter();
   }
 });
 
-// Save email when user types/pastes
+// Clear log
+btnClearLog.addEventListener('click', () => {
+  logArea.innerHTML = '';
+});
+
+// Save email on change
 inputEmail.addEventListener('change', async () => {
   const email = inputEmail.value.trim();
   if (email) {
-    await chrome.runtime.sendMessage({
-      type: 'SAVE_EMAIL',
-      source: 'sidepanel',
-      payload: { email },
-    });
+    await chrome.runtime.sendMessage({ type: 'SAVE_EMAIL', source: 'sidepanel', payload: { email } });
   }
 });
 
@@ -254,8 +259,19 @@ chrome.runtime.onMessage.addListener((message) => {
     case 'STEP_STATUS_CHANGED': {
       const { step, status } = message.payload;
       updateStepUI(step, status);
-      // Update status display
       chrome.runtime.sendMessage({ type: 'GET_STATE', source: 'sidepanel' }).then(updateStatusDisplay);
+      if (status === 'completed') {
+        chrome.runtime.sendMessage({ type: 'GET_STATE', source: 'sidepanel' }).then(state => {
+          if (state.oauthUrl) {
+            displayOauthUrl.textContent = state.oauthUrl;
+            displayOauthUrl.classList.add('has-value');
+          }
+          if (state.localhostUrl) {
+            displayLocalhostUrl.textContent = state.localhostUrl;
+            displayLocalhostUrl.classList.add('has-value');
+          }
+        });
+      }
       break;
     }
 
@@ -276,16 +292,16 @@ chrome.runtime.onMessage.addListener((message) => {
       switch (phase) {
         case 'waiting_email':
           autoContinueBar.style.display = 'flex';
-          btnAutoRun.textContent = 'Waiting...';
+          btnAutoRun.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> Paused';
           break;
         case 'complete':
           btnAutoRun.disabled = false;
-          btnAutoRun.textContent = 'Auto Run';
+          btnAutoRun.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> Auto';
           autoContinueBar.style.display = 'none';
           break;
         case 'stopped':
           btnAutoRun.disabled = false;
-          btnAutoRun.textContent = 'Auto Run';
+          btnAutoRun.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> Auto';
           autoContinueBar.style.display = 'none';
           break;
       }
