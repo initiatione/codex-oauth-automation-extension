@@ -32,6 +32,7 @@ const DEFAULT_STATE = {
   vpsUrl: '',
   customPassword: '',
   mailProvider: '163', // 'qq' or '163'
+  inbucketHost: '',
   inbucketMailbox: '',
 };
 
@@ -86,6 +87,7 @@ async function resetState() {
     'vpsUrl',
     'customPassword',
     'mailProvider',
+    'inbucketHost',
     'inbucketMailbox',
   ]);
   await chrome.storage.session.clear();
@@ -98,6 +100,7 @@ async function resetState() {
     vpsUrl: prev.vpsUrl || '',
     customPassword: prev.customPassword || '',
     mailProvider: prev.mailProvider || '163',
+    inbucketHost: prev.inbucketHost || '',
     inbucketMailbox: prev.inbucketMailbox || '',
   });
 }
@@ -241,6 +244,15 @@ async function reuseOrCreateTab(source, url, options = {}) {
       if (options.inject) {
         if (registry[source]) registry[source].ready = false;
         await setState({ tabRegistry: registry });
+        if (options.injectSource) {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            func: (injectedSource) => {
+              window.__MULTIPAGE_SOURCE = injectedSource;
+            },
+            args: [options.injectSource],
+          });
+        }
         await chrome.scripting.executeScript({
           target: { tabId },
           files: options.inject,
@@ -274,6 +286,15 @@ async function reuseOrCreateTab(source, url, options = {}) {
 
     // If dynamic injection needed (VPS panel), re-inject after navigation
     if (options.inject) {
+      if (options.injectSource) {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: (injectedSource) => {
+            window.__MULTIPAGE_SOURCE = injectedSource;
+          },
+          args: [options.injectSource],
+        });
+      }
       await chrome.scripting.executeScript({
         target: { tabId },
         files: options.inject,
@@ -303,6 +324,15 @@ async function reuseOrCreateTab(source, url, options = {}) {
       };
       chrome.tabs.onUpdated.addListener(listener);
     });
+    if (options.injectSource) {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: (injectedSource) => {
+          window.__MULTIPAGE_SOURCE = injectedSource;
+        },
+        args: [options.injectSource],
+      });
+    }
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: options.inject,
@@ -569,6 +599,7 @@ async function handleMessage(message, sender) {
       if (message.payload.vpsUrl !== undefined) updates.vpsUrl = message.payload.vpsUrl;
       if (message.payload.customPassword !== undefined) updates.customPassword = message.payload.customPassword;
       if (message.payload.mailProvider !== undefined) updates.mailProvider = message.payload.mailProvider;
+      if (message.payload.inbucketHost !== undefined) updates.inbucketHost = message.payload.inbucketHost;
       if (message.payload.inbucketMailbox !== undefined) updates.inbucketMailbox = message.payload.inbucketMailbox;
       await setState(updates);
       return { ok: true };
@@ -813,6 +844,7 @@ async function autoRunLoop(totalRuns) {
     const keepSettings = {
       vpsUrl: prevState.vpsUrl,
       mailProvider: prevState.mailProvider,
+      inbucketHost: prevState.inbucketHost,
       inbucketMailbox: prevState.inbucketMailbox,
       autoRunning: true,
     };
@@ -999,18 +1031,38 @@ function getMailConfig(state) {
     return { source: 'mail-163', url: 'https://mail.163.com/js6/main.jsp?df=mail163_letter#module=mbox.ListModule%7C%7B%22fid%22%3A1%2C%22order%22%3A%22date%22%2C%22desc%22%3Atrue%7D', label: '163 Mail' };
   }
   if (provider === 'inbucket') {
+    const host = normalizeInbucketOrigin(state.inbucketHost);
     const mailbox = (state.inbucketMailbox || '').trim();
+    if (!host) {
+      return { error: 'Inbucket host is empty or invalid.' };
+    }
     if (!mailbox) {
       return { error: 'Inbucket mailbox name is empty.' };
     }
     return {
       source: 'inbucket-mail',
-      url: `https://inbucket.j2to.de/m/${encodeURIComponent(mailbox)}/`,
+      url: `${host}/m/${encodeURIComponent(mailbox)}/`,
       label: `Inbucket Mailbox (${mailbox})`,
       navigateOnReuse: true,
+      inject: ['content/utils.js', 'content/inbucket-mail.js'],
+      injectSource: 'inbucket-mail',
     };
   }
   return { source: 'qq-mail', url: 'https://wx.mail.qq.com/', label: 'QQ Mail' };
+}
+
+function normalizeInbucketOrigin(rawValue) {
+  const value = (rawValue || '').trim();
+  if (!value) return '';
+
+  const candidate = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(value) ? value : `https://${value}`;
+
+  try {
+    const parsed = new URL(candidate);
+    return parsed.origin;
+  } catch {
+    return '';
+  }
 }
 
 async function executeStep4(state) {
@@ -1022,13 +1074,19 @@ async function executeStep4(state) {
   const alive = await isTabAlive(mail.source);
   if (alive) {
     if (mail.navigateOnReuse) {
-      await reuseOrCreateTab(mail.source, mail.url);
+      await reuseOrCreateTab(mail.source, mail.url, {
+        inject: mail.inject,
+        injectSource: mail.injectSource,
+      });
     } else {
       const tabId = await getTabId(mail.source);
       await chrome.tabs.update(tabId, { active: true });
     }
   } else {
-    await reuseOrCreateTab(mail.source, mail.url);
+    await reuseOrCreateTab(mail.source, mail.url, {
+      inject: mail.inject,
+      injectSource: mail.injectSource,
+    });
   }
 
   const result = await sendToContentScript(mail.source, {
@@ -1124,13 +1182,19 @@ async function executeStep7(state) {
   const alive = await isTabAlive(mail.source);
   if (alive) {
     if (mail.navigateOnReuse) {
-      await reuseOrCreateTab(mail.source, mail.url);
+      await reuseOrCreateTab(mail.source, mail.url, {
+        inject: mail.inject,
+        injectSource: mail.injectSource,
+      });
     } else {
       const tabId = await getTabId(mail.source);
       await chrome.tabs.update(tabId, { active: true });
     }
   } else {
-    await reuseOrCreateTab(mail.source, mail.url);
+    await reuseOrCreateTab(mail.source, mail.url, {
+      inject: mail.inject,
+      injectSource: mail.injectSource,
+    });
   }
 
   const result = await sendToContentScript(mail.source, {

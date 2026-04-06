@@ -26,6 +26,8 @@ const autoContinueBar = document.getElementById('auto-continue-bar');
 const btnClearLog = document.getElementById('btn-clear-log');
 const inputVpsUrl = document.getElementById('input-vps-url');
 const selectMailProvider = document.getElementById('select-mail-provider');
+const rowInbucketHost = document.getElementById('row-inbucket-host');
+const inputInbucketHost = document.getElementById('input-inbucket-host');
 const rowInbucketMailbox = document.getElementById('row-inbucket-mailbox');
 const inputInbucketMailbox = document.getElementById('input-inbucket-mailbox');
 const inputRunCount = document.getElementById('input-run-count');
@@ -88,6 +90,9 @@ async function restoreState() {
     if (state.mailProvider) {
       selectMailProvider.value = state.mailProvider;
     }
+    if (state.inbucketHost) {
+      inputInbucketHost.value = state.inbucketHost;
+    }
     if (state.inbucketMailbox) {
       inputInbucketMailbox.value = state.inbucketMailbox;
     }
@@ -118,6 +123,7 @@ function syncPasswordField(state) {
 
 function updateMailProviderUI() {
   const useInbucket = selectMailProvider.value === 'inbucket';
+  rowInbucketHost.style.display = useInbucket ? '' : 'none';
   rowInbucketMailbox.style.display = useInbucket ? '' : 'none';
 }
 
@@ -403,6 +409,14 @@ inputInbucketMailbox.addEventListener('change', async () => {
     type: 'SAVE_SETTING',
     source: 'sidepanel',
     payload: { inbucketMailbox: inputInbucketMailbox.value.trim() },
+  });
+});
+
+inputInbucketHost.addEventListener('change', async () => {
+  await chrome.runtime.sendMessage({
+    type: 'SAVE_SETTING',
+    source: 'sidepanel',
+    payload: { inbucketHost: inputInbucketHost.value.trim() },
   });
 });
 

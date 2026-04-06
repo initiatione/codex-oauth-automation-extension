@@ -54,14 +54,6 @@
       ],
       "js": ["content/utils.js", "content/duck-mail.js"],
       "run_at": "document_idle"
-    },
-    {
-      "matches": [
-        "https://inbucket.j2to.de/*"
-      ],
-      "js": ["content/utils.js", "content/inbucket-mail.js"],
-      "all_frames": true,
-      "run_at": "document_idle"
     }
   ],
   "action": {

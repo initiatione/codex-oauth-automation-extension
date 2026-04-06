@@ -1,5 +1,5 @@
 // content/inbucket-mail.js — Content script for Inbucket polling (steps 4, 7)
-// Injected on: inbucket.j2to.de
+// Injected dynamically on the configured Inbucket host
 //
 // Supported page:
 // - /m/<mailbox>/
