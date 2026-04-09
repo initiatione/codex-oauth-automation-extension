@@ -1230,7 +1230,7 @@ let autoRunActive = false;
 let autoRunCurrentRun = 0;
 let autoRunTotalRuns = 1;
 let autoRunAttemptRun = 0;
-const VERIFICATION_POLL_MAX_ROUNDS = 9;
+const VERIFICATION_POLL_MAX_ROUNDS = 5;
 const AUTO_STEP_DELAYS = {
   1: 2000,
   2: 2000,
