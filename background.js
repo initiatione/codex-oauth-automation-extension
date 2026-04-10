@@ -344,39 +344,90 @@ async function pingContentScriptOnTab(tabId) {
   }
 }
 
+async function waitForTabUrlFamily(source, tabId, referenceUrl, options = {}) {
+  const { timeoutMs = 15000, retryDelayMs = 400 } = options;
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (matchesSourceUrlFamily(source, tab.url, referenceUrl)) {
+        return tab;
+      }
+    } catch {
+      return null;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+  }
+
+  return null;
+}
+
 async function ensureContentScriptReadyOnTab(source, tabId, options = {}) {
-  const { inject = null, injectSource = null } = options;
-  const pong = await pingContentScriptOnTab(tabId);
+  const {
+    inject = null,
+    injectSource = null,
+    timeoutMs = 30000,
+    retryDelayMs = 700,
+    logMessage = '',
+  } = options;
 
-  if (pong?.ok && (!pong.source || pong.source === source)) {
-    await registerTab(source, tabId);
-    return;
+  const start = Date.now();
+  let lastError = null;
+  let logged = false;
+
+  while (Date.now() - start < timeoutMs) {
+    const pong = await pingContentScriptOnTab(tabId);
+    if (pong?.ok && (!pong.source || pong.source === source)) {
+      await registerTab(source, tabId);
+      return;
+    }
+
+    if (!inject || !inject.length) {
+      throw new Error(`${getSourceLabel(source)} 内容脚本未就绪，且未提供可用的注入文件。`);
+    }
+
+    const registry = await getTabRegistry();
+    if (registry[source]) {
+      registry[source].ready = false;
+      await setState({ tabRegistry: registry });
+    }
+
+    try {
+      if (injectSource) {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: (injectedSource) => {
+            window.__MULTIPAGE_SOURCE = injectedSource;
+          },
+          args: [injectSource],
+        });
+      }
+
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: inject,
+      });
+    } catch (err) {
+      lastError = err;
+    }
+
+    const pongAfterInject = await pingContentScriptOnTab(tabId);
+    if (pongAfterInject?.ok && (!pongAfterInject.source || pongAfterInject.source === source)) {
+      await registerTab(source, tabId);
+      return;
+    }
+
+    if (logMessage && !logged) {
+      await addLog(logMessage, 'warn');
+      logged = true;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
   }
 
-  if (!inject || !inject.length) {
-    throw new Error(`${getSourceLabel(source)} 内容脚本未就绪，且未提供可用的注入文件。`);
-  }
-
-  const registry = await getTabRegistry();
-  if (registry[source]) {
-    registry[source].ready = false;
-    await setState({ tabRegistry: registry });
-  }
-
-  if (injectSource) {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      func: (injectedSource) => {
-        window.__MULTIPAGE_SOURCE = injectedSource;
-      },
-      args: [injectSource],
-    });
-  }
-
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: inject,
-  });
+  throw lastError || new Error(`${getSourceLabel(source)} 内容脚本长时间未就绪。`);
 }
 
 // ============================================================
@@ -1799,23 +1850,20 @@ async function executeStep1(state) {
   const tabId = tab.id;
   await rememberSourceLastUrl('vps-panel', state.vpsUrl);
 
-  await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      resolve();
-    }, 30000);
-    const listener = (updatedTabId, info) => {
-      if (updatedTabId === tabId && info.status === 'complete') {
-        chrome.tabs.onUpdated.removeListener(listener);
-        clearTimeout(timer);
-        resolve();
-      }
-    };
-    chrome.tabs.onUpdated.addListener(listener);
+  await addLog('步骤 1：CPA 面板已打开，正在等待页面进入目标地址...');
+  const matchedTab = await waitForTabUrlFamily('vps-panel', tabId, state.vpsUrl, {
+    timeoutMs: 15000,
+    retryDelayMs: 400,
   });
+  if (!matchedTab) {
+    await addLog('步骤 1：CPA 页面尚未完全进入目标地址，继续尝试连接内容脚本...', 'warn');
+  }
 
   await ensureContentScriptReadyOnTab('vps-panel', tabId, {
     inject: injectFiles,
+    timeoutMs: 45000,
+    retryDelayMs: 900,
+    logMessage: '步骤 1：CPA 面板仍在加载，正在重试连接内容脚本...',
   });
 
   const result = await sendToContentScriptResilient('vps-panel', {
