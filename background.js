@@ -3511,8 +3511,10 @@ async function autoRunLoop(totalRuns, options = {}) {
         inbucketMailbox: prevState.inbucketMailbox,
         cloudflareDomain: prevState.cloudflareDomain,
         cloudflareDomains: prevState.cloudflareDomains,
+        // Fresh attempts must drop stale tab/url runtime state from the prior run.
+        tabRegistry: {},
+        sourceLastUrls: {},
         ...getAutoRunStatusPayload('running', { currentRun: targetRun, totalRuns, attemptRun: attemptRuns }),
-        ...(forceFreshTabsNextRun ? { tabRegistry: {} } : {}),
       };
       await resetState();
       await setState(keepSettings);
