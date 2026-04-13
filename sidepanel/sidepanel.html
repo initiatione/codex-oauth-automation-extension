@@ -201,14 +201,13 @@
       <div class="data-row">
         <span class="data-label">自动重试</span>
         <div class="data-inline fallback-inline">
-          <label class="toggle-switch" for="input-auto-skip-failures" title="Auto retry restarts the current round from step 1 after a step failure.">
-            <input type="checkbox" id="input-auto-skip-failures" checked />
+          <label class="toggle-switch" for="input-auto-skip-failures">
+            <input type="checkbox" id="input-auto-skip-failures" />
             <span class="toggle-switch-track" aria-hidden="true">
               <span class="toggle-switch-thumb"></span>
             </span>
           </label>
-          <span class="auto-delay-caption">Retry the current round from step 1 after a short delay.</span>
-          <div class="fallback-thread-interval" style="display:none;">
+          <div class="fallback-thread-interval">
             <span class="auto-delay-caption">线程间隔</span>
             <div class="auto-delay-controls">
               <input type="number" id="input-auto-skip-failures-thread-interval-minutes" class="data-input auto-delay-input" value="0"

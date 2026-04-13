@@ -671,7 +671,7 @@ function updateFallbackThreadIntervalInputState() {
     return;
   }
 
-  inputAutoSkipFailuresThreadIntervalMinutes.disabled = true;
+  inputAutoSkipFailuresThreadIntervalMinutes.disabled = !(inputAutoSkipFailures.checked && getRunCountValue() > 1);
 }
 
 function updateAutoDelayInputState() {
@@ -2970,8 +2970,20 @@ inputRunCount.addEventListener('blur', () => {
 });
 
 inputAutoSkipFailures.addEventListener('change', async () => {
-  inputAutoSkipFailures.checked = true;
+  if (inputAutoSkipFailures.checked && !isAutoSkipFailuresPromptDismissed()) {
+    const result = await openAutoSkipFailuresConfirmModal();
+    if (!result.confirmed) {
+      inputAutoSkipFailures.checked = false;
+      updateFallbackThreadIntervalInputState();
+      return;
+    }
+    if (result.dismissPrompt) {
+      setAutoSkipFailuresPromptDismissed(true);
+    }
+  }
   updateFallbackThreadIntervalInputState();
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
 });
 
 inputAutoSkipFailuresThreadIntervalMinutes.addEventListener('input', () => {
