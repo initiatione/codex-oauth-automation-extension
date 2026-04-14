@@ -43,6 +43,9 @@ const AUTO_STEP_DELAY_MIN_ALLOWED_SECONDS = 0;
 const AUTO_STEP_DELAY_MAX_ALLOWED_SECONDS = 600;
 const LEGACY_AUTO_STEP_DELAY_KEYS = ['autoStepRandomDelayMinSeconds', 'autoStepRandomDelayMaxSeconds'];
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
+const MAIL_2925_MODE_PROVIDE = 'provide';
+const MAIL_2925_MODE_RECEIVE = 'receive';
+const DEFAULT_MAIL_2925_MODE = MAIL_2925_MODE_PROVIDE;
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
 const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
 const DEFAULT_HOTMAIL_REMOTE_BASE_URL = '';
@@ -72,6 +75,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoRunDelayMinutes: 30,
   autoStepDelaySeconds: null,
   mailProvider: '163',
+  mail2925Mode: DEFAULT_MAIL_2925_MODE,
   emailGenerator: 'duck',
   emailPrefix: '',
   inbucketHost: '',
@@ -244,6 +248,12 @@ function normalizeMailProvider(value = '') {
   }
 }
 
+function normalizeMail2925Mode(value = '') {
+  return String(value || '').trim().toLowerCase() === MAIL_2925_MODE_RECEIVE
+    ? MAIL_2925_MODE_RECEIVE
+    : DEFAULT_MAIL_2925_MODE;
+}
+
 function normalizeLocalCpaStep9Mode(value = '') {
   return String(value || '').trim().toLowerCase() === 'bypass'
     ? 'bypass'
@@ -361,6 +371,8 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeAutoStepDelaySeconds(value, PERSISTED_SETTING_DEFAULTS.autoStepDelaySeconds);
     case 'mailProvider':
       return normalizeMailProvider(value);
+    case 'mail2925Mode':
+      return normalizeMail2925Mode(value);
     case 'emailGenerator':
       return normalizeEmailGenerator(value);
     case 'emailPrefix':
@@ -651,6 +663,13 @@ function isCustomMailProvider(stateOrProvider) {
     ? stateOrProvider
     : stateOrProvider?.mailProvider;
   return provider === 'custom';
+}
+
+function getMail2925Mode(stateOrMode) {
+  if (typeof stateOrMode === 'string') {
+    return normalizeMail2925Mode(stateOrMode);
+  }
+  return normalizeMail2925Mode(stateOrMode?.mail2925Mode);
 }
 
 async function syncHotmailAccounts(accounts) {
@@ -1276,14 +1295,20 @@ function generateRandomSuffix(length = 6) {
   return suffix;
 }
 
-function isGeneratedAliasProvider(provider) {
-  return provider === '2925';
+function isGeneratedAliasProvider(stateOrProvider, mail2925Mode = undefined) {
+  const provider = typeof stateOrProvider === 'string'
+    ? stateOrProvider
+    : stateOrProvider?.mailProvider;
+  const resolvedMail2925Mode = mail2925Mode !== undefined
+    ? normalizeMail2925Mode(mail2925Mode)
+    : getMail2925Mode(stateOrProvider);
+  return provider === '2925' && resolvedMail2925Mode === MAIL_2925_MODE_PROVIDE;
 }
 
 function shouldUseCustomRegistrationEmail(state = {}) {
   return isCustomMailProvider(state)
     || (!isHotmailProvider(state)
-      && !isGeneratedAliasProvider(state.mailProvider)
+      && !isGeneratedAliasProvider(state)
       && normalizeEmailGenerator(state.emailGenerator) === 'custom');
 }
 
@@ -1295,7 +1320,7 @@ function buildGeneratedAliasEmail(state) {
     throw new Error('2925 邮箱前缀未设置，请先在侧边栏填写。');
   }
 
-  if (provider === '2925') {
+  if (provider === '2925' && isGeneratedAliasProvider(state)) {
     return `${emailPrefix}${generateRandomSuffix(6)}@2925.com`;
   }
 
@@ -3564,7 +3589,7 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return account.email;
   }
 
-  if (isGeneratedAliasProvider(currentState.mailProvider)) {
+  if (isGeneratedAliasProvider(currentState)) {
     if (!currentState.emailPrefix) {
       throw new Error('2925 邮箱前缀未设置，请先在侧边栏填写。');
     }
@@ -4690,7 +4715,7 @@ async function executeStep3(state) {
       preferredAccountId: state.currentHotmailAccountId || null,
     });
     resolvedEmail = account.email;
-  } else if (isGeneratedAliasProvider(state.mailProvider)) {
+  } else if (isGeneratedAliasProvider(state)) {
     resolvedEmail = buildGeneratedAliasEmail(state);
   }
 

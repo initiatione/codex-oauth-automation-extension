@@ -66,6 +66,8 @@ const rowSub2ApiGroup = document.getElementById('row-sub2api-group');
 const inputSub2ApiGroup = document.getElementById('input-sub2api-group');
 const selectMailProvider = document.getElementById('select-mail-provider');
 const btnMailLogin = document.getElementById('btn-mail-login');
+const rowMail2925Mode = document.getElementById('row-mail-2925-mode');
+const mail2925ModeButtons = Array.from(document.querySelectorAll('[data-mail-2925-mode]'));
 const rowEmailGenerator = document.getElementById('row-email-generator');
 const selectEmailGenerator = document.getElementById('select-email-generator');
 const hotmailSection = document.getElementById('hotmail-section');
@@ -139,6 +141,9 @@ const AUTO_RUN_MAX_RETRIES_PER_ROUND = 3;
 const AUTO_STEP_DELAY_MIN_SECONDS = 0;
 const AUTO_STEP_DELAY_MAX_SECONDS = 600;
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
+const MAIL_2925_MODE_PROVIDE = 'provide';
+const MAIL_2925_MODE_RECEIVE = 'receive';
+const DEFAULT_MAIL_2925_MODE = MAIL_2925_MODE_PROVIDE;
 const AUTO_SKIP_FAILURES_PROMPT_DISMISSED_STORAGE_KEY = 'multipage-auto-skip-failures-prompt-dismissed';
 const AUTO_RUN_FALLBACK_RISK_PROMPT_DISMISSED_STORAGE_KEY = 'multipage-auto-run-fallback-risk-prompt-dismissed';
 const AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS = 15;
@@ -226,7 +231,8 @@ const LOG_LEVEL_LABELS = {
 };
 
 function usesGeneratedAliasMailProvider(provider) {
-  return provider === '2925';
+  return String(provider || '').trim() === '2925'
+    && getSelectedMail2925Mode() === MAIL_2925_MODE_PROVIDE;
 }
 
 function showToast(message, type = 'error', duration = 4000) {
@@ -926,6 +932,7 @@ function collectSettingsPayload() {
     sub2apiGroupName: inputSub2ApiGroup.value.trim(),
     customPassword: inputPassword.value,
     mailProvider: selectMailProvider.value,
+    mail2925Mode: getSelectedMail2925Mode(),
     emailGenerator: selectEmailGenerator.value,
     emailPrefix: inputEmailPrefix.value.trim(),
     inbucketHost: inputInbucketHost.value.trim(),
@@ -949,6 +956,12 @@ function normalizeLocalCpaStep9Mode(value = '') {
     : DEFAULT_LOCAL_CPA_STEP9_MODE;
 }
 
+function normalizeMail2925Mode(value = '') {
+  return String(value || '').trim().toLowerCase() === MAIL_2925_MODE_RECEIVE
+    ? MAIL_2925_MODE_RECEIVE
+    : DEFAULT_MAIL_2925_MODE;
+}
+
 function normalizeHotmailServiceMode(value = '') {
   return HOTMAIL_SERVICE_MODE_LOCAL;
 }
@@ -962,6 +975,20 @@ function setLocalCpaStep9Mode(mode) {
   const resolvedMode = normalizeLocalCpaStep9Mode(mode);
   localCpaStep9ModeButtons.forEach((button) => {
     const active = button.dataset.localCpaStep9Mode === resolvedMode;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+
+function getSelectedMail2925Mode() {
+  const activeButton = mail2925ModeButtons.find((button) => button.classList.contains('is-active'));
+  return normalizeMail2925Mode(activeButton?.dataset.mail2925Mode);
+}
+
+function setMail2925Mode(mode) {
+  const resolvedMode = normalizeMail2925Mode(mode);
+  mail2925ModeButtons.forEach((button) => {
+    const active = button.dataset.mail2925Mode === resolvedMode;
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-pressed', String(active));
   });
@@ -1213,6 +1240,7 @@ function applySettingsState(state) {
       ? 'custom'
       : '163');
   selectMailProvider.value = restoredMailProvider;
+  setMail2925Mode(state?.mail2925Mode);
   selectEmailGenerator.value = String(state?.emailGenerator || '').trim().toLowerCase() === 'cloudflare' ? 'cloudflare' : 'duck';
   inputEmailPrefix.value = state?.emailPrefix || '';
   inputInbucketHost.value = state?.inbucketHost || '';
@@ -1567,9 +1595,13 @@ function isCurrentEmailManagedByHotmail(state = latestState) {
   return inputEmailValue === hotmailEmail || stateEmailValue === hotmailEmail;
 }
 
-function isCurrentEmailManagedByGeneratedAlias(provider = latestState?.mailProvider, state = latestState) {
+function isCurrentEmailManagedByGeneratedAlias(
+  provider = latestState?.mailProvider,
+  state = latestState,
+  mail2925Mode = latestState?.mail2925Mode
+) {
   const normalizedProvider = String(provider || '').trim();
-  if (!usesGeneratedAliasMailProvider(normalizedProvider)) {
+  if (!(normalizedProvider === '2925' && normalizeMail2925Mode(mail2925Mode) === MAIL_2925_MODE_PROVIDE)) {
     return false;
   }
 
@@ -1803,12 +1835,16 @@ function renderHotmailAccounts() {
 
 function updateMailProviderUI() {
   const use2925 = selectMailProvider.value === '2925';
-  const useGeneratedAlias = usesGeneratedAliasMailProvider(selectMailProvider.value);
+  const mail2925Mode = getSelectedMail2925Mode();
+  const useGeneratedAlias = use2925 && mail2925Mode === MAIL_2925_MODE_PROVIDE;
   const useInbucket = selectMailProvider.value === 'inbucket';
   const useHotmail = selectMailProvider.value === 'hotmail-api';
   const useCustomEmail = isCustomMailProvider();
   const useEmailGenerator = !useHotmail && !useGeneratedAlias && !useCustomEmail;
   updateMailLoginButtonState();
+  if (rowMail2925Mode) {
+    rowMail2925Mode.style.display = use2925 ? '' : 'none';
+  }
   rowEmailPrefix.style.display = useGeneratedAlias ? '' : 'none';
   const hotmailServiceMode = getSelectedHotmailServiceMode();
   rowInbucketHost.style.display = useInbucket ? '' : 'none';
@@ -1846,7 +1882,7 @@ function updateMailProviderUI() {
   const uiCopy = useCustomEmail ? getCustomMailProviderUiCopy() : getEmailGeneratorUiCopy();
   inputEmail.placeholder = useHotmail
     ? '由 Hotmail 账号池自动分配'
-    : (use2925 ? '步骤 3 自动生成 2925 邮箱并回填' : uiCopy.placeholder);
+    : (useGeneratedAlias ? '步骤 3 自动生成 2925 邮箱并回填' : uiCopy.placeholder);
   btnFetchEmail.disabled = useGeneratedAlias || useCustomEmail || isAutoRunLockedPhase();
   if (!btnFetchEmail.disabled) {
     btnFetchEmail.textContent = uiCopy.buttonLabel;
@@ -3002,19 +3038,47 @@ inputPassword.addEventListener('blur', () => {
 
 selectMailProvider.addEventListener('change', async () => {
   const previousProvider = latestState?.mailProvider || '';
+  const previousMail2925Mode = latestState?.mail2925Mode;
   const nextProvider = selectMailProvider.value;
   updateMailProviderUI();
   const leavingHotmail = previousProvider === 'hotmail-api'
     && nextProvider !== 'hotmail-api'
     && isCurrentEmailManagedByHotmail();
-  const leavingGeneratedAlias = previousProvider !== nextProvider
-    && usesGeneratedAliasMailProvider(previousProvider)
-    && isCurrentEmailManagedByGeneratedAlias(previousProvider);
+  const leavingGeneratedAlias = (
+    previousProvider !== nextProvider
+    || (previousProvider === '2925' && normalizeMail2925Mode(previousMail2925Mode) !== getSelectedMail2925Mode())
+  ) && previousProvider === '2925'
+    && normalizeMail2925Mode(previousMail2925Mode) === MAIL_2925_MODE_PROVIDE
+    && isCurrentEmailManagedByGeneratedAlias(previousProvider, latestState, previousMail2925Mode);
   if (leavingHotmail || leavingGeneratedAlias) {
     await clearRegistrationEmail({ silent: true }).catch(() => { });
   }
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
+});
+
+mail2925ModeButtons.forEach((button) => {
+  button.addEventListener('click', async () => {
+    const nextMode = normalizeMail2925Mode(button.dataset.mail2925Mode);
+    const previousMode = normalizeMail2925Mode(latestState?.mail2925Mode);
+    if (nextMode === getSelectedMail2925Mode()) {
+      return;
+    }
+
+    setMail2925Mode(nextMode);
+    updateMailProviderUI();
+
+    const leavingGeneratedAlias = selectMailProvider.value === '2925'
+      && previousMode === MAIL_2925_MODE_PROVIDE
+      && nextMode !== MAIL_2925_MODE_PROVIDE
+      && isCurrentEmailManagedByGeneratedAlias('2925', latestState, previousMode);
+    if (leavingGeneratedAlias) {
+      await clearRegistrationEmail({ silent: true }).catch(() => { });
+    }
+
+    markSettingsDirty(true);
+    saveSettings({ silent: true }).catch(() => { });
+  });
 });
 
 selectEmailGenerator.addEventListener('change', () => {
@@ -3402,6 +3466,7 @@ initHotmailListExpandedState();
 updateSaveButtonState();
 updateConfigMenuControls();
 setLocalCpaStep9Mode(DEFAULT_LOCAL_CPA_STEP9_MODE);
+setMail2925Mode(DEFAULT_MAIL_2925_MODE);
 initializeReleaseInfo().catch((err) => {
   console.error('Failed to initialize release info:', err);
 });
