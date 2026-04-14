@@ -96,6 +96,26 @@ async function setEmailState(email) {
   currentState = { ...currentState, email };
 }
 
+async function setEmailStateSilently(email) {
+  currentState = { ...currentState, email };
+}
+
+function isHotmailProvider() {
+  return false;
+}
+
+function isLuckmailProvider() {
+  return false;
+}
+
+async function patchHotmailAccount() {}
+
+async function clearLuckmailRuntimeState() {}
+
+function shouldUseCustomRegistrationEmail() {
+  return false;
+}
+
 function broadcastDataUpdate() {}
 
 async function addLog(message) {
@@ -163,8 +183,8 @@ return {
   let snapshot = api.snapshot();
   assert.deepStrictEqual(
     snapshot.removedBatches,
-    [[1], [2]],
-    'handleStepData(9) 应先关闭当前 callback 页，再按同源首段路径清理残留页'
+    [[1], [2, 3]],
+    'handleStepData(9) 应先关闭当前 callback 页，再按同前缀路径清理残留页'
   );
   assert.strictEqual(
     snapshot.currentState.tabRegistry['signup-page'],

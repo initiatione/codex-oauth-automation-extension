@@ -61,6 +61,7 @@ async function testPollFreshVerificationCodeRethrowsStop() {
 let stopRequested = false;
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 const HOTMAIL_PROVIDER = 'hotmail-api';
+const LUCKMAIL_PROVIDER = 'luckmail-api';
 const VERIFICATION_POLL_MAX_ROUNDS = 5;
 const logs = [];
 let resendCalls = 0;
@@ -70,6 +71,9 @@ function getHotmailVerificationPollConfig() {
 }
 async function pollHotmailVerificationCode() {
   throw new Error('hotmail path should not run in this test');
+}
+async function pollLuckmailVerificationCode() {
+  throw new Error('luckmail path should not run in this test');
 }
 function getVerificationCodeStateKey(step) {
   return step === 4 ? 'lastSignupCode' : 'lastLoginCode';
@@ -122,6 +126,7 @@ async function testResolveVerificationStepRethrowsStopFromFreshRequest() {
   const api = new Function(`
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 const HOTMAIL_PROVIDER = 'hotmail-api';
+const LUCKMAIL_PROVIDER = 'luckmail-api';
 const logs = [];
 let pollCalls = 0;
 
