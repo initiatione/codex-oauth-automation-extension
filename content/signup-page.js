@@ -22,6 +22,9 @@ if (document.documentElement.getAttribute(SIGNUP_PAGE_LISTENER_SENTINEL) !== '1'
       || message.type === 'RESEND_VERIFICATION_CODE'
       || message.type === 'ENSURE_SIGNUP_ENTRY_READY'
       || message.type === 'ENSURE_SIGNUP_PASSWORD_PAGE_READY'
+      || message.type === 'STEP5_SUBMIT_PROFILE'
+      || message.type === 'STEP5_FINISH_ONBOARDING'
+      || message.type === 'STEP5_GET_POST_SUBMIT_STATE'
     ) {
       resetStopState();
       handleCommand(message).then((result) => {
@@ -59,7 +62,7 @@ async function handleCommand(message) {
       switch (message.step) {
         case 2: return await step2_clickRegister(message.payload);
         case 3: return await step3_fillEmailPassword(message.payload);
-        case 5: return await step5_fillNameBirthday(message.payload);
+        case 5: return await step5_submitProfile(message.payload);
         case 6: return await step6_login(message.payload);
         case 8: return await step8_findAndClick();
         default: throw new Error(`signup-page.js 不处理步骤 ${message.step}`);
@@ -77,6 +80,12 @@ async function handleCommand(message) {
       return await ensureSignupEntryReady();
     case 'ENSURE_SIGNUP_PASSWORD_PAGE_READY':
       return await ensureSignupPasswordPageReady();
+    case 'STEP5_SUBMIT_PROFILE':
+      return await step5_submitProfile(message.payload);
+    case 'STEP5_FINISH_ONBOARDING':
+      return await step5_finishOnboarding(message.payload);
+    case 'STEP5_GET_POST_SUBMIT_STATE':
+      return getStep5PostSubmitState();
     case 'STEP8_FIND_AND_CLICK':
       return await step8_findAndClick();
     case 'STEP8_GET_STATE':
@@ -1839,7 +1848,353 @@ function getSerializableRect(el) {
 // Step 5: Fill Name & Birthday / Age
 // ============================================================
 
-async function step5_fillNameBirthday(payload) {
+const STEP5_ACTION_DELAY_MS = 15000;
+
+async function waitBeforeStep5Action(label) {
+  log(`步骤 5：等待 ${Math.round(STEP5_ACTION_DELAY_MS / 1000)} 秒后执行${label}...`, 'info');
+  await sleep(STEP5_ACTION_DELAY_MS);
+}
+
+function getStep5SubmitButton() {
+  const direct = document.querySelector('button[type="submit"], input[type="submit"]');
+  if (direct && isVisibleElement(direct) && isActionEnabled(direct)) {
+    return direct;
+  }
+
+  const candidates = document.querySelectorAll('button, [role="button"], input[type="submit"]');
+  return Array.from(candidates).find((el) => {
+    if (!isVisibleElement(el) || !isActionEnabled(el)) return false;
+    const text = getActionText(el);
+    return /完成|create|continue|finish|done|agree/i.test(text);
+  }) || null;
+}
+
+function getStep5PostSubmitState() {
+  const errorText = getStep5ErrorText();
+  if (errorText) {
+    return {
+      state: 'invalid_profile',
+      errorText,
+      url: location.href,
+    };
+  }
+
+  if (isStep5Ready()) {
+    return {
+      state: 'profile_form',
+      url: location.href,
+    };
+  }
+
+  if (isAddPhonePageReady()) {
+    return {
+      state: 'add_phone_page',
+      url: location.href,
+    };
+  }
+
+  return {
+    state: 'unknown',
+    url: location.href,
+  };
+}
+
+function getChatComposerInput() {
+  const selectors = [
+    '.ProseMirror[aria-label*="ChatGPT"]',
+    '.ProseMirror[aria-label*="聊天"]',
+    '.ProseMirror',
+    '[contenteditable="true"][aria-label*="ChatGPT"]',
+    '[contenteditable="true"][aria-label*="聊天"]',
+    'textarea[placeholder*="尽管问"]',
+    'textarea[placeholder*="ChatGPT"]',
+  ];
+
+  for (const selector of selectors) {
+    const el = document.querySelector(selector);
+    if (el && isVisibleElement(el)) {
+      return el;
+    }
+  }
+
+  return null;
+}
+
+function getChatComposerForm() {
+  const composer = getChatComposerInput();
+  return composer?.closest('form') || null;
+}
+
+function getChatComposerText() {
+  const composer = getChatComposerInput();
+  if (!composer) return '';
+  if ('value' in composer) {
+    return String(composer.value || '').trim();
+  }
+  return String(composer.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function getGettingStartedButton() {
+  const button = document.querySelector('button[data-testid="getting-started-button"]');
+  if (button && isVisibleElement(button) && isActionEnabled(button)) {
+    return button;
+  }
+
+  const candidates = document.querySelectorAll('button, [role="button"]');
+  return Array.from(candidates).find((el) => {
+    if (!isVisibleElement(el) || !isActionEnabled(el)) return false;
+    return /好的，开始吧/i.test(getActionText(el));
+  }) || null;
+}
+
+function getVisibleButtonByText(pattern) {
+  const candidates = document.querySelectorAll('button, a, [role="button"], [role="link"], input[type="submit"], input[type="button"]');
+  return Array.from(candidates).find((el) => {
+    if (!isVisibleElement(el) || !isActionEnabled(el)) return false;
+    return pattern.test(getActionText(el));
+  }) || null;
+}
+
+function inspectStep5OnboardingState() {
+  const pageText = getPageTextSnapshot();
+  const gettingStartedButton = getGettingStartedButton();
+  if (gettingStartedButton) {
+    return {
+      state: 'getting_started_modal',
+      action: gettingStartedButton,
+      url: location.href,
+    };
+  }
+
+  if (/是什么促使你使用\s*ChatGPT/i.test(pageText)) {
+    return {
+      state: 'purpose_page',
+      action: getVisibleButtonByText(/跳过/i),
+      url: location.href,
+    };
+  }
+
+  if (/你想使用\s*ChatGPT\s*做些什么/i.test(pageText)) {
+    return {
+      state: 'use_case_page',
+      action: getVisibleButtonByText(/跳过/i),
+      url: location.href,
+    };
+  }
+
+  if (/有问题，尽管问/i.test(pageText) && /跳过导览/i.test(pageText)) {
+    return {
+      state: 'guide_page',
+      action: getVisibleButtonByText(/跳过导览|跳过/i),
+      url: location.href,
+    };
+  }
+
+  if (/你已准备就绪/i.test(pageText)) {
+    return {
+      state: 'ready_page',
+      action: getVisibleButtonByText(/^继续$|继续/i),
+      url: location.href,
+    };
+  }
+
+  const composer = getChatComposerInput();
+  if (composer) {
+    return {
+      state: 'chat_home',
+      composer,
+      form: composer.closest('form'),
+      url: location.href,
+    };
+  }
+
+  return {
+    state: 'unknown',
+    url: location.href,
+  };
+}
+
+async function fillChatComposer(composer, text) {
+  if (!composer) {
+    throw new Error('未找到聊天输入框。');
+  }
+
+  composer.focus();
+  await sleep(120);
+
+  if ('value' in composer) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+      || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    if (!setter) {
+      throw new Error('当前输入框不支持自动写入。');
+    }
+    setter.call(composer, text);
+    composer.dispatchEvent(new Event('input', { bubbles: true }));
+    composer.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(300);
+    return;
+  }
+
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(composer);
+  range.collapse(true);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+
+  let inserted = false;
+  try {
+    inserted = document.execCommand('insertText', false, text);
+  } catch {
+    inserted = false;
+  }
+
+  if (!inserted) {
+    composer.textContent = text;
+    composer.dispatchEvent(new InputEvent('beforeinput', {
+      inputType: 'insertText',
+      data: text,
+      bubbles: true,
+      cancelable: true,
+    }));
+    composer.dispatchEvent(new InputEvent('input', {
+      inputType: 'insertText',
+      data: text,
+      bubbles: true,
+    }));
+  } else {
+    composer.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  composer.dispatchEvent(new Event('change', { bubbles: true }));
+  await sleep(300);
+}
+
+function getChatSendButton() {
+  const composerForm = getChatComposerForm();
+  const candidates = document.querySelectorAll('button, [role="button"], input[type="submit"]');
+  return Array.from(candidates).find((el) => {
+    if (!isVisibleElement(el) || !isActionEnabled(el)) return false;
+    if (composerForm && el.closest('form') !== composerForm) return false;
+    const text = [
+      getActionText(el),
+      el.getAttribute?.('data-testid') || '',
+      el.getAttribute?.('aria-label') || '',
+    ].join(' ');
+    if (/听写|语音|voice|microphone/i.test(text)) return false;
+    return /发送|send|submit/i.test(text) || el.getAttribute('type') === 'submit';
+  }) || null;
+}
+
+async function submitChatComposerMessage(messageText) {
+  const composer = getChatComposerInput();
+  if (!composer) {
+    throw new Error('未找到聊天输入框。');
+  }
+
+  await humanPause(350, 900);
+  await fillChatComposer(composer, messageText);
+  log(`步骤 5：已在对话框中输入消息：${messageText}`);
+
+  const sendButton = getChatSendButton();
+  if (sendButton) {
+    await humanPause(250, 700);
+    simulateClick(sendButton);
+    log('步骤 5：已点击发送按钮。');
+    return;
+  }
+
+  const composerForm = getChatComposerForm();
+  if (composerForm && typeof composerForm.requestSubmit === 'function') {
+    composerForm.requestSubmit();
+    log('步骤 5：未定位到发送按钮，已通过 form.requestSubmit() 提交消息。');
+    await sleep(800);
+    if (getChatComposerText() !== messageText) {
+      return;
+    }
+    log('步骤 5：form.requestSubmit() 后输入框内容未清空，准备改用 Enter 重试。', 'warn');
+  }
+
+  composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+  composer.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', bubbles: true }));
+  composer.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+  log('步骤 5：未定位到发送按钮，已通过 Enter 提交消息。');
+}
+
+async function waitForGreetingMessageSent(messageText, timeout = 15000) {
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const bodyText = getPageTextSnapshot();
+    const composerText = getChatComposerText();
+    if (bodyText.includes(messageText) && composerText !== messageText) {
+      return { sent: true };
+    }
+    await sleep(250);
+  }
+
+  throw new Error(`发送消息“${messageText}”后长时间未看到已发送结果。URL: ${location.href}`);
+}
+
+async function step5_finishOnboarding(payload = {}) {
+  const messageText = String(payload.messageText || '你好').trim() || '你好';
+  const start = Date.now();
+  const timeout = Math.max(30000, Number(payload.timeoutMs) || 120000);
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const snapshot = inspectStep5OnboardingState();
+
+    switch (snapshot.state) {
+      case 'purpose_page':
+      case 'use_case_page':
+      case 'guide_page':
+        if (!snapshot.action) {
+          throw new Error(`步骤 5：已识别到 ${snapshot.state}，但未找到可点击的跳过按钮。URL: ${snapshot.url}`);
+        }
+        await waitBeforeStep5Action('跳过');
+        await humanPause(250, 700);
+        simulateClick(snapshot.action);
+        log(`步骤 5：已在 ${snapshot.state} 点击跳过。`);
+        await sleep(1200);
+        continue;
+      case 'ready_page':
+        if (!snapshot.action) {
+          throw new Error(`步骤 5：已识别到准备完成页，但未找到“继续”按钮。URL: ${snapshot.url}`);
+        }
+        await waitBeforeStep5Action('继续');
+        await humanPause(250, 700);
+        simulateClick(snapshot.action);
+        log('步骤 5：已点击“继续”。');
+        await sleep(1200);
+        continue;
+      case 'getting_started_modal':
+        await waitBeforeStep5Action('“好的，开始吧”');
+        await humanPause(250, 700);
+        simulateClick(snapshot.action);
+        log('步骤 5：已点击“好的，开始吧”。');
+        await sleep(1200);
+        continue;
+      case 'chat_home':
+        await waitBeforeStep5Action('发送消息');
+        await submitChatComposerMessage(messageText);
+        await waitForGreetingMessageSent(messageText);
+        log(`步骤 5：已完成 onboarding，并成功发送消息：${messageText}`, 'ok');
+        return {
+          completed: true,
+          messageText,
+        };
+      default:
+        await sleep(300);
+        continue;
+    }
+  }
+
+  throw new Error(`步骤 5：等待完成 ChatGPT onboarding 超时。URL: ${location.href}`);
+}
+
+async function step5_submitProfile(payload) {
   const { firstName, lastName, age, year, month, day } = payload;
   if (!firstName || !lastName) throw new Error('未提供姓名数据。');
 
@@ -2010,23 +2365,23 @@ async function step5_fillNameBirthday(payload) {
     throw new Error('未找到生日或年龄输入项。URL: ' + location.href);
   }
 
-  // Click "完成帐户创建" button
-  await sleep(500);
-  const completeBtn = document.querySelector('button[type="submit"]')
+  const completeBtn = getStep5SubmitButton()
     || await waitForElementByText('button', /完成|create|continue|finish|done|agree/i, 5000).catch(() => null);
   if (!completeBtn) {
     throw new Error('未找到“完成帐户创建”按钮。URL: ' + location.href);
   }
 
-  await humanPause(500, 1300);
-  simulateClick(completeBtn);
-  log('步骤 5：已点击“完成帐户创建”，正在等待页面结果...');
-
-  const outcome = await waitForStep5SubmitOutcome();
-  if (outcome.invalidProfile) {
-    throw new Error(`步骤 5：${outcome.errorText}`);
-  }
-
-  log(`步骤 5：资料已通过。`, 'ok');
-  reportComplete(5, { addPhonePage: Boolean(outcome.addPhonePage) });
+  log('步骤 5：资料填写完成，准备提交并进入 ChatGPT onboarding...');
+  await waitBeforeStep5Action('提交资料');
+  window.setTimeout(() => {
+    try {
+      simulateClick(completeBtn);
+    } catch (error) {
+      console.error('[MultiPage:signup-page] deferred step5 submit failed:', error?.message || error);
+    }
+  }, 120);
+  return {
+    submitted: true,
+    url: location.href,
+  };
 }

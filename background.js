@@ -3200,6 +3200,12 @@ function isSignupPasswordPageUrl(rawUrl) {
     && /\/create-account\/password(?:[/?#]|$)/i.test(parsed.pathname || '');
 }
 
+function isChatGptUrl(rawUrl) {
+  const parsed = parseUrlSafely(rawUrl);
+  if (!parsed) return false;
+  return parsed.hostname === 'chatgpt.com';
+}
+
 function is163MailHost(hostname = '') {
   return hostname === 'mail.163.com'
     || hostname.endsWith('.mail.163.com')
@@ -3557,6 +3563,10 @@ function getContentScriptResponseTimeoutMs(message) {
 
   if (message.type === 'PREPARE_SIGNUP_VERIFICATION') {
     return 45000;
+  }
+
+  if (message.type === 'STEP5_FINISH_ONBOARDING') {
+    return 180000;
   }
 
   return 30000;
@@ -5178,8 +5188,8 @@ async function handleStepData(step, payload) {
 const stepWaiters = new Map();
 let resumeWaiter = null;
 const AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS = 120000;
-const AUTO_RUN_BACKGROUND_COMPLETED_STEPS = new Set([1, 2, 4, 6, 7, 8]);
-const STEP_COMPLETION_SIGNAL_STEPS = new Set([3, 5, 9]);
+const AUTO_RUN_BACKGROUND_COMPLETED_STEPS = new Set([1, 2, 4, 5, 6, 7, 8]);
+const STEP_COMPLETION_SIGNAL_STEPS = new Set([3, 9]);
 
 function waitForStepComplete(step, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
@@ -7413,21 +7423,113 @@ async function executeStep4(state) {
 }
 
 // ============================================================
-// Step 5: Fill Name & Birthday (via signup-page.js)
+// Step 5: Fill Name & Birthday, then finish onboarding on chatgpt.com
 // ============================================================
 
 async function executeStep5(state) {
+  const signupTabId = await getTabId('signup-page');
+  if (!signupTabId || !(await isTabAlive('signup-page'))) {
+    throw new Error('认证页面标签页已关闭，请先重新完成步骤 4。');
+  }
+
   const { firstName, lastName } = generateRandomName();
   const { year, month, day } = generateRandomBirthday();
 
   await addLog(`步骤 5：已生成姓名 ${firstName} ${lastName}，生日 ${year}-${month}-${day}`);
+  await chrome.tabs.update(signupTabId, { active: true });
+  await ensureContentScriptReadyOnTab('signup-page', signupTabId, {
+    inject: SIGNUP_PAGE_INJECT_FILES,
+    injectSource: 'signup-page',
+    timeoutMs: 45000,
+    retryDelayMs: 900,
+    logMessage: '步骤 5：资料页内容脚本未就绪，正在等待页面恢复...',
+  });
 
-  await sendToContentScript('signup-page', {
-    type: 'EXECUTE_STEP',
+  const submitResult = await sendToContentScriptResilient('signup-page', {
+    type: 'STEP5_SUBMIT_PROFILE',
     step: 5,
     source: 'background',
     payload: { firstName, lastName, year, month, day },
+  }, {
+    timeoutMs: 30000,
+    retryDelayMs: 700,
+    logMessage: '步骤 5：资料页正在切换，等待页面恢复后继续提交...',
   });
+
+  if (submitResult?.error) {
+    throw new Error(submitResult.error);
+  }
+
+  await addLog('步骤 5：资料已提交，正在等待进入 ChatGPT onboarding...', 'info');
+
+  const chatTab = await waitForTabUrlMatch(signupTabId, (url) => isChatGptUrl(url), {
+    timeoutMs: 45000,
+    retryDelayMs: 300,
+  });
+
+  if (!chatTab) {
+    const currentTab = await chrome.tabs.get(signupTabId).catch(() => null);
+    const currentUrl = currentTab?.url || '';
+    if (isSignupPageHost(parseUrlSafely(currentUrl)?.hostname || '')) {
+      await ensureContentScriptReadyOnTab('signup-page', signupTabId, {
+        inject: SIGNUP_PAGE_INJECT_FILES,
+        injectSource: 'signup-page',
+        timeoutMs: 20000,
+        retryDelayMs: 700,
+        logMessage: '步骤 5：提交后页面仍停留在资料页，正在检查页面结果...',
+      });
+      const postSubmitState = await sendToContentScriptResilient('signup-page', {
+        type: 'STEP5_GET_POST_SUBMIT_STATE',
+        step: 5,
+        source: 'background',
+        payload: {},
+      }, {
+        timeoutMs: 15000,
+        retryDelayMs: 500,
+        logMessage: '步骤 5：提交结果检查中，等待页面恢复...',
+      });
+
+      if (postSubmitState?.state === 'invalid_profile') {
+        throw new Error(`步骤 5：${postSubmitState.errorText}`);
+      }
+      if (postSubmitState?.state === 'add_phone_page') {
+        throw new Error('步骤 5：提交资料后进入了手机号页面，当前流程无法继续自动化。');
+      }
+      if (postSubmitState?.state === 'profile_form') {
+        throw new Error('步骤 5：提交资料后仍停留在资料页，未进入 ChatGPT onboarding。');
+      }
+    }
+
+    throw new Error(`步骤 5：提交资料后长时间未进入 ChatGPT onboarding。当前 URL: ${currentUrl || 'unknown'}`);
+  }
+
+  await ensureContentScriptReadyOnTab('signup-page', signupTabId, {
+    inject: SIGNUP_PAGE_INJECT_FILES,
+    injectSource: 'signup-page',
+    timeoutMs: 45000,
+    retryDelayMs: 900,
+    logMessage: '步骤 5：ChatGPT onboarding 页面仍在加载，正在重试连接内容脚本...',
+  });
+
+  const onboardingResult = await sendToContentScriptResilient('signup-page', {
+    type: 'STEP5_FINISH_ONBOARDING',
+    step: 5,
+    source: 'background',
+    payload: {
+      messageText: '你好',
+      timeoutMs: 120000,
+    },
+  }, {
+    timeoutMs: 180000,
+    retryDelayMs: 700,
+    logMessage: '步骤 5：ChatGPT onboarding 正在切换，等待页面恢复后继续...',
+  });
+
+  if (onboardingResult?.error) {
+    throw new Error(onboardingResult.error);
+  }
+
+  await completeStepFromBackground(5, onboardingResult || { messageText: '你好' });
 }
 
 // ============================================================
