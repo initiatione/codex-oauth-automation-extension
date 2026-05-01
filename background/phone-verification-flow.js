@@ -11,6 +11,7 @@
       requestStop,
       sendToContentScriptResilient,
       setState,
+      assertStep9PhoneFlowCurrent,
       broadcastDataUpdate,
       sleepWithStop,
       throwIfStopped,
@@ -63,6 +64,7 @@
     const PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX = 'PHONE_RESEND_BANNED_NUMBER::';
     const PHONE_MANUAL_FREE_REUSE_ERROR_PREFIX = 'PHONE_MANUAL_FREE_REUSE::';
     const PHONE_AUTO_FREE_REUSE_PREPARE_ERROR_PREFIX = 'PHONE_AUTO_FREE_REUSE_PREPARE::';
+    const PHONE_FLOW_STALE_ERROR_PREFIX = 'PHONE_FLOW_STALE::';
     const FREE_PHONE_REUSE_PREPARE_TIMEOUT_MS = 20000;
     const FREE_PHONE_REUSE_PREPARE_INTERVAL_MS = 2000;
     const FREE_PHONE_REUSE_PREPARE_MAX_ROUNDS = 10;
@@ -348,6 +350,7 @@
       }
       return {
         ...normalizedActivation,
+        ...(activation?.__phoneFlowToken ? { __phoneFlowToken: activation.__phoneFlowToken } : {}),
         phoneCodeReceived: true,
         phoneCodeReceivedAt: normalizedActivation.phoneCodeReceivedAt || Date.now(),
       };
@@ -375,6 +378,7 @@
         ...normalized,
         source: 'free-manual-reuse',
         ...(recordedAt ? { recordedAt } : {}),
+        ...(record?.__phoneFlowToken ? { __phoneFlowToken: record.__phoneFlowToken } : {}),
       };
     }
 
@@ -571,7 +575,54 @@
       );
     }
 
+    function isStalePhoneFlowError(error) {
+      return String(error?.message || error || '').startsWith(PHONE_FLOW_STALE_ERROR_PREFIX);
+    }
+
+    function getPhoneFlowTokenFromOptions(options = {}) {
+      const direct = options?.phoneFlowToken || options?.token;
+      if (direct) {
+        return direct;
+      }
+      const stateToken = options?.state?.__phoneFlowToken;
+      if (stateToken) {
+        return stateToken;
+      }
+      return options?.state?.__phoneFlowToken
+        || options?.activation?.__phoneFlowToken
+        || options?.config?.__phoneFlowToken
+        || null;
+    }
+
+    async function assertPhoneFlowCurrent(options = {}) {
+      throwIfStopped();
+      const phoneFlowToken = getPhoneFlowTokenFromOptions(options);
+      if (!phoneFlowToken) {
+        return;
+      }
+      if (typeof assertStep9PhoneFlowCurrent !== 'function') {
+        return;
+      }
+      try {
+        await assertStep9PhoneFlowCurrent({
+          ...options,
+          phoneFlowToken,
+        });
+      } catch (error) {
+        if (isStalePhoneFlowError(error)) {
+          throw error;
+        }
+        const message = String(error?.message || error || '').trim() || 'Step 9 phone flow is no longer current.';
+        await addLog(
+          `旧 Step 9 接码任务已失效，停止当前接码动作。${options.actionLabel ? `边界：${options.actionLabel}` : ''}`,
+          'warn'
+        );
+        throw new Error(`${PHONE_FLOW_STALE_ERROR_PREFIX}${message}`);
+      }
+    }
+
     async function fetchHeroSmsPayload(config, query, actionLabel) {
+      await assertPhoneFlowCurrent({ actionLabel, heroSmsAction: query?.action || '', config });
       const requestUrl = buildHeroSmsUrl(config.baseUrl, {
         api_key: config.apiKey,
         ...query,
@@ -615,6 +666,7 @@
       return {
         apiKey,
         baseUrl: normalizeUrl(state.heroSmsBaseUrl, DEFAULT_HERO_SMS_BASE_URL),
+        __phoneFlowToken: state.__phoneFlowToken || null,
       };
     }
 
@@ -776,7 +828,10 @@
           if (price !== null) {
             return price;
           }
-        } catch (_) {
+        } catch (error) {
+          if (isStalePhoneFlowError(error)) {
+            throw error;
+          }
           // Best-effort lookup only.
         }
       }
@@ -819,7 +874,10 @@
           if (priceCandidates.length > 0) {
             break;
           }
-        } catch (_) {
+        } catch (error) {
+          if (isStalePhoneFlowError(error)) {
+            throw error;
+          }
           // best effort
         }
       }
@@ -872,6 +930,9 @@
             maxPrice: nextMaxPrice,
           });
         } catch (error) {
+          if (isStalePhoneFlowError(error)) {
+            throw error;
+          }
           const updatedMaxPrice = extractHeroSmsWrongMaxPrice(error?.payload || error?.message);
           if (
             nextMaxPrice !== null
@@ -1030,6 +1091,9 @@
                 lastFailureText = payloadText || lastFailureText;
                 lastError = new Error(`HeroSMS ${requestAction} failed: ${payloadText || 'empty response'}`);
               } catch (error) {
+                if (isStalePhoneFlowError(error)) {
+                  throw error;
+                }
                 const payloadOrMessage = error?.payload || error?.message;
                 if (isHeroSmsTerminalError(payloadOrMessage)) {
                   throw new Error(`HeroSMS ${requestAction} failed: ${describeHeroSmsPayload(payloadOrMessage) || 'empty response'}`);
@@ -1096,7 +1160,10 @@
     }
 
     async function reactivatePhoneActivation(state = {}, activation) {
-      const normalizedActivation = normalizeActivation(activation);
+      const normalizedActivation = attachPhoneFlowTokenToActivation(
+        normalizeActivation(activation),
+        state?.__phoneFlowToken || activation?.__phoneFlowToken || null
+      );
       if (!normalizedActivation) {
         throw new Error('Reusable phone activation is missing.');
       }
@@ -1111,11 +1178,14 @@
         const text = describeHeroSmsPayload(payload);
         throw new Error(`HeroSMS reactivate failed: ${text || 'empty response'}`);
       }
-      return nextActivation;
+      return attachPhoneFlowTokenToActivation(nextActivation, normalizedActivation.__phoneFlowToken);
     }
 
     async function setPhoneActivationStatus(state = {}, activation, status, actionLabel) {
-      const normalizedActivation = normalizeActivation(activation);
+      const normalizedActivation = attachPhoneFlowTokenToActivation(
+        normalizeActivation(activation),
+        state?.__phoneFlowToken || activation?.__phoneFlowToken || null
+      );
       if (!normalizedActivation) {
         return '';
       }
@@ -1144,7 +1214,10 @@
       }
       try {
         await setPhoneActivationStatus(state, normalizedActivation || activation, 8, 'HeroSMS setStatus(8)');
-      } catch (_) {
+      } catch (error) {
+        if (isStalePhoneFlowError(error)) {
+          throw error;
+        }
         // Best-effort cleanup.
       }
     }
@@ -1152,13 +1225,24 @@
     async function requestAdditionalPhoneSms(state = {}, activation) {
       try {
         await setPhoneActivationStatus(state, activation, 3, 'HeroSMS setStatus(3)');
-      } catch (_) {
+      } catch (error) {
+        if (isStalePhoneFlowError(error)) {
+          throw error;
+        }
         // Best-effort request only.
       }
     }
 
     async function prepareFreeReusablePhoneActivation(state = {}, activation) {
-      const normalizedActivation = normalizeFreeReusablePhoneActivation(activation);
+      await assertPhoneFlowCurrent({
+        actionLabel: 'prepare automatic free reusable phone',
+        state,
+        activation,
+      });
+      const normalizedActivation = attachPhoneFlowTokenToActivation(
+        normalizeFreeReusablePhoneActivation(activation),
+        state?.__phoneFlowToken || activation?.__phoneFlowToken || null
+      );
       if (!normalizedActivation) {
         return {
           ok: false,
@@ -1175,7 +1259,7 @@
       }
 
       const statusAction = resolveActivationStatusAction(normalizedActivation);
-      const config = resolvePhoneConfig(state);
+      const config = resolvePhoneConfig(attachPhoneFlowTokenToState(state, normalizedActivation.__phoneFlowToken));
       const start = Date.now();
       let lastStatus = '';
       let prepareRound = 0;
@@ -1189,12 +1273,15 @@
 
         try {
           await setPhoneActivationStatus(
-            state,
+            attachPhoneFlowTokenToState(state, normalizedActivation.__phoneFlowToken),
             normalizedActivation,
             3,
             'HeroSMS setStatus(3) for automatic free reuse'
           );
         } catch (error) {
+          if (isStalePhoneFlowError(error)) {
+            throw error;
+          }
           return {
             ok: false,
             reason: 'set_status_failed',
@@ -1217,6 +1304,9 @@
             id: normalizedActivation.activationId,
           }, `HeroSMS ${statusAction} for automatic free reuse`);
         } catch (error) {
+          if (isStalePhoneFlowError(error)) {
+            throw error;
+          }
           return {
             ok: false,
             reason: 'status_poll_failed',
@@ -1283,13 +1373,17 @@
     }
 
     async function pollPhoneActivationCode(state = {}, activation, options = {}) {
-      const normalizedActivation = normalizeActivation(activation);
+      const normalizedActivation = attachPhoneFlowTokenToActivation(
+        normalizeActivation(activation),
+        state?.__phoneFlowToken || activation?.__phoneFlowToken || null
+      );
       if (!normalizedActivation) {
         throw new Error('Phone activation is missing.');
       }
       const statusAction = resolveActivationStatusAction(normalizedActivation);
 
-      const config = resolvePhoneConfig(state);
+      const guardedState = attachPhoneFlowTokenToState(state, normalizedActivation.__phoneFlowToken);
+      const config = resolvePhoneConfig(guardedState);
       const configuredTimeoutMs = Math.max(1000, Number(options.timeoutMs) || 0);
       const timeoutMs = configuredTimeoutMs || (
         typeof getOAuthFlowStepTimeoutMs === 'function'
@@ -1311,6 +1405,11 @@
           break;
         }
         throwIfStopped();
+        await assertPhoneFlowCurrent({
+          actionLabel: options.actionLabel || `HeroSMS ${statusAction}`,
+          state: guardedState,
+          activation: normalizedActivation,
+        });
         const payload = await fetchHeroSmsPayload(config, {
           action: statusAction,
           id: normalizedActivation.activationId,
@@ -1405,6 +1504,11 @@
 
     async function submitPhoneNumber(tabId, phoneNumber, activation = null) {
       const state = await getState();
+      await assertPhoneFlowCurrent({
+        actionLabel: 'submit add-phone number',
+        state,
+        activation,
+      });
       const countryConfig = resolveCountryConfigFromActivation(activation, state);
       const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
         ? await getOAuthFlowStepTimeoutMs(30000, { step: 9, actionLabel: 'submit add-phone number' })
@@ -1430,7 +1534,17 @@
       return result || {};
     }
 
-    async function submitPhoneVerificationCode(tabId, code) {
+    async function submitPhoneVerificationCode(tabId, code, options = {}) {
+      const state = attachPhoneFlowTokenToState(
+        await getState(),
+        options?.phoneFlowToken || options?.activation?.__phoneFlowToken || options?.state?.__phoneFlowToken || null
+      );
+      await assertPhoneFlowCurrent({
+        actionLabel: 'submit phone verification code',
+        state,
+        activation: options?.activation,
+        phoneFlowToken: options?.phoneFlowToken,
+      });
       const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
         ? await getOAuthFlowStepTimeoutMs(45000, { step: 9, actionLabel: 'submit phone verification code' })
         : 45000;
@@ -1451,7 +1565,17 @@
       return result || {};
     }
 
-    async function resendPhoneVerificationCode(tabId) {
+    async function resendPhoneVerificationCode(tabId, options = {}) {
+      const state = attachPhoneFlowTokenToState(
+        await getState(),
+        options?.phoneFlowToken || options?.activation?.__phoneFlowToken || options?.state?.__phoneFlowToken || null
+      );
+      await assertPhoneFlowCurrent({
+        actionLabel: 'resend phone verification code',
+        state,
+        activation: options?.activation,
+        phoneFlowToken: options?.phoneFlowToken,
+      });
       const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
         ? await getOAuthFlowStepTimeoutMs(30000, { step: 9, actionLabel: 'resend phone verification code' })
         : 30000;
@@ -1472,7 +1596,17 @@
       return result || {};
     }
 
-    async function returnToAddPhone(tabId) {
+    async function returnToAddPhone(tabId, options = {}) {
+      const state = attachPhoneFlowTokenToState(
+        await getState(),
+        options?.phoneFlowToken || options?.activation?.__phoneFlowToken || options?.state?.__phoneFlowToken || null
+      );
+      await assertPhoneFlowCurrent({
+        actionLabel: 'return to add-phone page',
+        state,
+        activation: options?.activation,
+        phoneFlowToken: options?.phoneFlowToken,
+      });
       const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
         ? await getOAuthFlowStepTimeoutMs(30000, { step: 9, actionLabel: 'return to add-phone page' })
         : 30000;
@@ -1493,8 +1627,9 @@
       return result || {};
     }
 
-    async function checkPhoneResendPageError(tabId) {
+    async function checkPhoneResendPageError(tabId, state = {}) {
       try {
+        await assertPhoneFlowCurrent({ actionLabel: 'check phone resend error', state });
         const result = await sendToContentScriptResilient('signup-page', {
           type: 'CHECK_PHONE_RESEND_ERROR',
           source: 'background',
@@ -1510,6 +1645,9 @@
         }
         return result || {};
       } catch (error) {
+        if (isStalePhoneFlowError(error)) {
+          throw error;
+        }
         if (isPhoneResendBannedNumberError(error)) {
           return {
             hasError: true,
@@ -1535,6 +1673,7 @@
     }
 
     async function fillPhoneNumberOnly(tabId, activation) {
+      await assertPhoneFlowCurrent({ actionLabel: 'fill free reusable phone number', activation });
       const normalizedActivation = normalizeFreeReusablePhoneActivation(activation);
       if (!normalizedActivation) {
         throw new Error('Free reusable phone activation is missing.');
@@ -1620,13 +1759,20 @@
       return normalizeActivation(activation)?.source === 'free-auto-reuse';
     }
 
-    async function retireFreeReusableActivation(reason = '') {
+    async function retireFreeReusableActivation(reason = '', options = {}) {
+      await assertPhoneFlowCurrent({
+        actionLabel: 'retire free reusable phone activation',
+        state: options?.state,
+        activation: options?.activation,
+        phoneFlowToken: options?.phoneFlowToken,
+      });
       const suffix = reason ? ` ${reason}` : '';
       await addLog(`Step 9: cleared saved free reusable phone.${suffix}`, 'warn');
       await clearFreeReusableActivation();
     }
 
     async function markFreeReusableActivationAfterAutoSuccess(state, activation) {
+      await assertPhoneFlowCurrent({ actionLabel: 'mark automatic free reuse success', state, activation });
       const normalizedActivation = normalizeFreeReusablePhoneActivation(activation);
       if (!normalizedActivation || !isFreeAutoReuseActivation(activation)) {
         return;
@@ -1667,6 +1813,7 @@
     }
 
     async function acquirePhoneActivation(state = {}, options = {}) {
+      await assertPhoneFlowCurrent({ actionLabel: 'acquire HeroSMS phone number', state });
       const countryCandidates = resolveCountryCandidates(state);
       const blockedCountryIds = new Set(
         (Array.isArray(options?.blockedCountryIds) ? options.blockedCountryIds : [])
@@ -1695,6 +1842,7 @@
       ) {
         try {
           const reactivated = await reactivatePhoneActivation(state, reusableActivation);
+          await assertPhoneFlowCurrent({ actionLabel: 'reuse HeroSMS phone number', state, activation: reactivated });
           reactivated.source = 'hero-sms-reactivate';
           await addLog(
             `Step 9: reusing ${resolveCountryLabelById(reactivated.countryId)} number ${reactivated.phoneNumber} (${reactivated.successfulUses + 1}/${reactivated.maxUses}).`,
@@ -1702,12 +1850,16 @@
           );
           return reactivated;
         } catch (error) {
+          if (isStalePhoneFlowError(error)) {
+            throw error;
+          }
           await addLog(`Step 9: failed to reuse phone number ${reusableActivation.phoneNumber}, falling back to a new number. ${error.message}`, 'warn');
           await clearReusableActivation();
         }
       }
 
       const activation = await requestPhoneActivation(state, { blockedCountryIds: Array.from(blockedCountryIds) });
+      await assertPhoneFlowCurrent({ actionLabel: 'store acquired HeroSMS phone number', state, activation });
       activation.source = 'hero-sms-new';
       await addLog(
         `Step 9: acquired ${HERO_SMS_SERVICE_LABEL} / ${resolveCountryLabelById(activation.countryId)} number ${activation.phoneNumber}.`,
@@ -1717,6 +1869,7 @@
     }
 
     async function markActivationReusableAfterSuccess(state, activation) {
+      await assertPhoneFlowCurrent({ actionLabel: 'mark reusable phone success', state, activation });
       const normalizedActivation = normalizeActivation(activation);
       if (isFreeAutoReuseActivation(normalizedActivation)) {
         return;
@@ -1743,6 +1896,7 @@
     }
 
     async function markFreeReusableActivationAfterCode(state, activation) {
+      await assertPhoneFlowCurrent({ actionLabel: 'record free reusable phone after code', state, activation });
       const latestState = {
         ...(state || {}),
         ...(typeof getState === 'function' ? await getState() : {}),
@@ -1772,11 +1926,13 @@
     }
 
     async function handoffFreeReusablePhone(tabId, state) {
+      await assertPhoneFlowCurrent({ actionLabel: 'handoff free reusable phone', state });
       if (!normalizeFreePhoneReuseEnabled(state?.freePhoneReuseEnabled)) {
         return null;
       }
-      const freeReusableActivation = normalizeFreeReusablePhoneActivation(
-        state[FREE_REUSABLE_PHONE_ACTIVATION_STATE_KEY]
+      const freeReusableActivation = attachPhoneFlowTokenToActivation(
+        normalizeFreeReusablePhoneActivation(state[FREE_REUSABLE_PHONE_ACTIVATION_STATE_KEY]),
+        state?.__phoneFlowToken || null
       );
       if (!freeReusableActivation) {
         return null;
@@ -1804,7 +1960,8 @@
           );
           if (prepared.reason === 'activation_cancelled') {
             await retireFreeReusableActivation(
-              `Automatic free reuse phone ${freeReusableActivation.phoneNumber} is cancelled on HeroSMS.`
+              `Automatic free reuse phone ${freeReusableActivation.phoneNumber} is cancelled on HeroSMS.`,
+              { state, activation: freeReusableActivation }
             );
           }
           if (typeof requestStop === 'function') {
@@ -1833,7 +1990,10 @@
     }
 
     async function waitForPhoneCodeOrRotateNumber(tabId, state, activation) {
-      const normalizedActivation = normalizeActivation(activation);
+      const normalizedActivation = attachPhoneFlowTokenToActivation(
+        normalizeActivation(activation),
+        state?.__phoneFlowToken || activation?.__phoneFlowToken || null
+      );
       if (!normalizedActivation) {
         throw new Error('Phone activation is missing.');
       }
@@ -1847,6 +2007,11 @@
       let resendTriggeredForCurrentNumber = false;
 
       for (let windowIndex = 1; windowIndex <= timeoutWindows; windowIndex += 1) {
+        await assertPhoneFlowCurrent({
+          actionLabel: 'wait phone SMS window',
+          state,
+          activation: normalizedActivation,
+        });
         await addLog(
           `Step 9: waiting up to ${waitSeconds} seconds for SMS on ${normalizedActivation.phoneNumber} (${windowIndex}/${timeoutWindows}).`,
           'info'
@@ -1861,7 +2026,7 @@
             maxRounds: pollMaxRounds,
             onStatus: async ({ elapsedMs, pollCount, statusText }) => {
               if (isHeroSmsWaitingStatusText(statusText)) {
-                const pageError = await checkPhoneResendPageError(tabId);
+                const pageError = await checkPhoneResendPageError(tabId, state);
                 if (pageError?.reason === 'resend_phone_banned') {
                   throw new Error(`${PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX}${pageError.message || 'OpenAI could not send SMS to this phone number.'}`);
                 }
@@ -1897,6 +2062,9 @@
             replaceNumber: false,
           };
         } catch (error) {
+          if (isStalePhoneFlowError(error)) {
+            throw error;
+          }
           if (isPhoneResendBannedNumberError(error)) {
             await addLog(
               `Step 9: OpenAI could not send SMS to ${normalizedActivation.phoneNumber} during SMS wait; replacing this number immediately. ${error.message}`,
@@ -1936,6 +2104,11 @@
               `Step 9: no SMS arrived for ${normalizedActivation.phoneNumber} within ${waitSeconds} seconds, requesting another SMS.`,
               'warn'
             );
+            await assertPhoneFlowCurrent({
+              actionLabel: 'request another SMS after timeout',
+              state,
+              activation: normalizedActivation,
+            });
             await requestAdditionalPhoneSms(state, normalizedActivation);
             if (resendTriggeredForCurrentNumber) {
               await addLog(
@@ -1945,10 +2118,17 @@
               continue;
             }
             try {
-              await resendPhoneVerificationCode(tabId);
+              await resendPhoneVerificationCode(tabId, {
+                state,
+                activation: normalizedActivation,
+                phoneFlowToken: normalizedActivation.__phoneFlowToken || state?.__phoneFlowToken || null,
+              });
               resendTriggeredForCurrentNumber = true;
               await addLog('Step 9: clicked "Resend text message" on the phone verification page.', 'info');
             } catch (resendError) {
+              if (isStalePhoneFlowError(resendError)) {
+                throw resendError;
+              }
               if (isPhoneResendBannedNumberError(resendError)) {
                 await addLog(
                   `Step 9: OpenAI could not send SMS to ${normalizedActivation.phoneNumber}; replacing this number immediately. ${resendError.message}`,
@@ -1983,6 +2163,11 @@
             continue;
           }
 
+          await assertPhoneFlowCurrent({
+            actionLabel: 'replace phone after SMS timeout',
+            state,
+            activation: normalizedActivation,
+          });
           await addLog(
             `Step 9: no SMS for ${normalizedActivation.phoneNumber} after ${timeoutWindows} window(s), replacing the number inside step 9.`,
             'warn'
@@ -1998,9 +2183,33 @@
       throw new Error('Phone verification did not complete successfully.');
     }
 
-    async function completePhoneVerificationFlow(tabId, initialPageState = null) {
+    function attachPhoneFlowTokenToState(state, phoneFlowToken) {
+      if (!phoneFlowToken) {
+        return state;
+      }
+      return {
+        ...(state || {}),
+        __phoneFlowToken: phoneFlowToken,
+      };
+    }
+
+    function attachPhoneFlowTokenToActivation(activation, phoneFlowToken) {
+      if (!activation || !phoneFlowToken) {
+        return activation;
+      }
+      return {
+        ...activation,
+        __phoneFlowToken: phoneFlowToken,
+      };
+    }
+
+    async function completePhoneVerificationFlow(tabId, initialPageState = null, options = {}) {
+      const phoneFlowToken = options?.phoneFlowToken || null;
+      await assertPhoneFlowCurrent({ actionLabel: 'start phone verification flow', phoneFlowToken });
       let state = await getState();
+      state = attachPhoneFlowTokenToState(state, phoneFlowToken);
       let activation = normalizeActivation(state[PHONE_ACTIVATION_STATE_KEY]);
+      activation = attachPhoneFlowTokenToActivation(activation, phoneFlowToken);
       let pageState = initialPageState || await readPhonePageState(tabId);
       let shouldCancelActivation = false;
       let remainingResendRequests = Math.max(0, Number(state.verificationResendCount) || 0);
@@ -2054,19 +2263,29 @@
       try {
         while (true) {
           state = await getState();
+          state = attachPhoneFlowTokenToState(state, phoneFlowToken);
           if (!activation) {
             activation = normalizeActivation(state[PHONE_ACTIVATION_STATE_KEY]);
+            activation = attachPhoneFlowTokenToActivation(activation, phoneFlowToken);
           }
 
           if (pageState?.addPhonePage) {
+            await assertPhoneFlowCurrent({
+              actionLabel: 'handle add-phone page',
+              state,
+              activation,
+              phoneFlowToken,
+            });
             if (!activation) {
               activation = await handoffFreeReusablePhone(tabId, state);
+              activation = attachPhoneFlowTokenToActivation(activation, phoneFlowToken);
               if (activation) {
                 shouldCancelActivation = false;
               } else {
                 activation = await acquirePhoneActivation(state, {
                   blockedCountryIds: getBlockedCountryIds(),
                 });
+                activation = attachPhoneFlowTokenToActivation(activation, phoneFlowToken);
                 shouldCancelActivation = true;
                 await persistCurrentActivation(activation);
               }
@@ -2086,7 +2305,8 @@
                 );
                 if (isFreeAutoReuseActivation(activation)) {
                   await retireFreeReusableActivation(
-                    `Automatic free reuse phone ${activation.phoneNumber} returned to add-phone repeatedly.`
+                    `Automatic free reuse phone ${activation.phoneNumber} returned to add-phone repeatedly.`,
+                    { state, activation, phoneFlowToken }
                   );
                 }
                 if (shouldCancelActivation && activation) {
@@ -2127,7 +2347,8 @@
                 );
                 if (isFreeAutoReuseActivation(activation)) {
                   await retireFreeReusableActivation(
-                    `Automatic free reuse phone ${activation.phoneNumber} was rejected as already used.`
+                    `Automatic free reuse phone ${activation.phoneNumber} was rejected as already used.`,
+                    { state, activation, phoneFlowToken }
                   );
                 }
                 if (shouldCancelActivation && activation) {
@@ -2171,6 +2392,12 @@
           }
 
           if (!pageState?.phoneVerificationPage) {
+            await assertPhoneFlowCurrent({
+              actionLabel: 'read phone verification page',
+              state,
+              activation,
+              phoneFlowToken,
+            });
             pageState = await readPhonePageState(tabId);
           }
 
@@ -2187,6 +2414,12 @@
 
           for (let attempt = 1; attempt <= DEFAULT_PHONE_SUBMIT_ATTEMPTS; attempt += 1) {
             throwIfStopped();
+            await assertPhoneFlowCurrent({
+              actionLabel: 'phone verification submit attempt',
+              state,
+              activation,
+              phoneFlowToken,
+            });
 
             const codeResult = await waitForPhoneCodeOrRotateNumber(tabId, state, activation);
             if (codeResult.replaceNumber) {
@@ -2199,10 +2432,15 @@
               [PHONE_VERIFICATION_CODE_STATE_KEY]: String(codeResult.code || '').trim(),
             });
             activation = markActivationPhoneCodeReceived(activation);
+            activation = attachPhoneFlowTokenToActivation(activation, phoneFlowToken);
             await persistCurrentActivation(activation, { resetCode: false });
             await markFreeReusableActivationAfterCode(state, activation);
             await addLog(`Step 9: received phone verification code ${codeResult.code}.`, 'info');
-            const submitResult = await submitPhoneVerificationCode(tabId, codeResult.code);
+            const submitResult = await submitPhoneVerificationCode(tabId, codeResult.code, {
+              state,
+              activation,
+              phoneFlowToken,
+            });
 
             if (submitResult.returnedToAddPhone) {
               await addLog(
@@ -2245,7 +2483,11 @@
                 remainingResendRequests -= 1;
                 await requestAdditionalPhoneSms(state, activation);
                 try {
-                  await resendPhoneVerificationCode(tabId);
+                  await resendPhoneVerificationCode(tabId, {
+                    state,
+                    activation,
+                    phoneFlowToken,
+                  });
                   await addLog('Step 9: clicked "Resend text message" after the phone code was rejected.', 'info');
                 } catch (resendError) {
                   if (isPhoneResendBannedNumberError(resendError)) {
@@ -2333,7 +2575,8 @@
 
           if (isFreeAutoReuseActivation(activation)) {
             await retireFreeReusableActivation(
-              `Automatic free reuse phone ${activation.phoneNumber} is being replaced after ${replaceReason || 'unknown failure'}.`
+              `Automatic free reuse phone ${activation.phoneNumber} is being replaced after ${replaceReason || 'unknown failure'}.`,
+              { state, activation, phoneFlowToken }
             );
           }
           if (shouldCancelActivation && activation) {
@@ -2346,8 +2589,21 @@
 
           let returnResult = { addPhonePage: true, phoneVerificationPage: false };
           try {
-            returnResult = await returnToAddPhone(tabId);
+            await assertPhoneFlowCurrent({
+              actionLabel: 'return to add-phone before replacement',
+              state,
+              activation,
+              phoneFlowToken,
+            });
+            returnResult = await returnToAddPhone(tabId, {
+              state,
+              activation,
+              phoneFlowToken,
+            });
           } catch (returnError) {
+            if (isStalePhoneFlowError(returnError)) {
+              throw returnError;
+            }
             await addLog(`Step 9: failed to return to add-phone page before replacing number. ${returnError.message}`, 'warn');
           }
 
@@ -2367,6 +2623,7 @@
         if (
           errorMessage.startsWith(PHONE_MANUAL_FREE_REUSE_ERROR_PREFIX)
           || errorMessage.startsWith(PHONE_AUTO_FREE_REUSE_PREPARE_ERROR_PREFIX)
+          || errorMessage.startsWith(PHONE_FLOW_STALE_ERROR_PREFIX)
         ) {
           throw error;
         }

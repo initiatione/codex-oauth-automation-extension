@@ -20,6 +20,7 @@
       recoverOAuthLocalhostTimeout,
       reloadStep8ConsentPage,
       reuseOrCreateTab,
+      createStep9PhoneFlowToken,
       sleepWithStop,
       STEP8_CLICK_RETRY_DELAY_MS,
       STEP8_MAX_ROUNDS,
@@ -86,6 +87,12 @@
           timeoutRecoveryAttempted = true;
         }
       }
+      const phoneFlowToken = typeof createStep9PhoneFlowToken === 'function'
+        ? await createStep9PhoneFlowToken({
+          visibleStep,
+          oauthUrl: activeState?.oauthUrl || '',
+        })
+        : null;
 
       return new Promise((resolve, reject) => {
         let resolved = false;
@@ -214,7 +221,8 @@
                     step: visibleStep,
                     actionLabel: '等待 OAuth 同意页出现',
                   })
-                  : STEP8_READY_WAIT_TIMEOUT_MS
+                  : STEP8_READY_WAIT_TIMEOUT_MS,
+                { phoneFlowToken }
               );
               if (!pageState?.consentReady) {
                 await sleepWithStop(STEP8_CLICK_RETRY_DELAY_MS);

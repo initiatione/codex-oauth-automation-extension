@@ -85,6 +85,7 @@ const LAST_STEP_ID = Math.max(
   PLUS_GOPAY_STEP_IDS[PLUS_GOPAY_STEP_IDS.length - 1] || 10
 );
 const FINAL_OAUTH_CHAIN_START_STEP = 7;
+const PHONE_FLOW_STALE_ERROR_PREFIX = 'PHONE_FLOW_STALE::';
 
 const {
   extractVerificationCodeFromMessage,
@@ -964,6 +965,99 @@ function throwIfAutoRunSessionStopped(sessionId) {
     throw new Error(STOP_ERROR_MESSAGE);
   }
   throwIfStopped();
+}
+
+let step9PhoneFlowTokenSeed = 0;
+let activeStep9PhoneFlowToken = null;
+let lastStaleStep9PhoneFlowLogKey = '';
+
+function normalizeStep9PhoneFlowToken(token = {}) {
+  if (!token || typeof token !== 'object' || Array.isArray(token)) {
+    return null;
+  }
+  const id = String(token.id || '').trim();
+  if (!id) {
+    return null;
+  }
+  return {
+    id,
+    autoRunSessionId: normalizeAutoRunSessionId(token.autoRunSessionId),
+    visibleStep: Number(token.visibleStep) || 9,
+    oauthUrl: String(token.oauthUrl || '').trim(),
+    signupTabId: Number.isInteger(token.signupTabId) ? token.signupTabId : null,
+  };
+}
+
+async function createStep9PhoneFlowToken(details = {}) {
+  step9PhoneFlowTokenSeed += 1;
+  activeStep9PhoneFlowToken = normalizeStep9PhoneFlowToken({
+    id: `${Date.now()}-${step9PhoneFlowTokenSeed}`,
+    autoRunSessionId,
+    visibleStep: details.visibleStep,
+    oauthUrl: details.oauthUrl,
+    signupTabId: details.signupTabId,
+  });
+  lastStaleStep9PhoneFlowLogKey = '';
+  return { ...activeStep9PhoneFlowToken };
+}
+
+function invalidateStep9PhoneFlow(reason = '') {
+  if (!activeStep9PhoneFlowToken) {
+    return;
+  }
+  activeStep9PhoneFlowToken = null;
+  lastStaleStep9PhoneFlowLogKey = '';
+  if (reason) {
+    console.log(LOG_PREFIX, `[step9-phone-flow] invalidated: ${reason}`);
+  }
+}
+
+async function logStaleStep9PhoneFlow(token, actionLabel = '') {
+  const normalizedToken = normalizeStep9PhoneFlowToken(token);
+  const key = `${normalizedToken?.id || 'unknown'}:${actionLabel || 'unknown'}`;
+  if (lastStaleStep9PhoneFlowLogKey === key) {
+    return;
+  }
+  lastStaleStep9PhoneFlowLogKey = key;
+  await addLog(
+    `旧 Step 9 接码任务已失效，已停止继续调用 HeroSMS。${actionLabel ? `边界：${actionLabel}` : ''}`,
+    'warn'
+  );
+}
+
+async function assertStep9PhoneFlowCurrent(options = {}) {
+  const token = normalizeStep9PhoneFlowToken(options.phoneFlowToken || options.token);
+  const actionLabel = String(options.actionLabel || options.heroSmsAction || '').trim();
+  if (!token) {
+    return;
+  }
+  const activeToken = normalizeStep9PhoneFlowToken(activeStep9PhoneFlowToken);
+  const latestState = await getState().catch(() => ({}));
+  const latestSessionId = normalizeAutoRunSessionId(latestState?.autoRunSessionId ?? autoRunSessionId);
+  const activeSessionId = normalizeAutoRunSessionId(autoRunSessionId || latestSessionId);
+  const latestOauthUrl = String(latestState?.oauthUrl || '').trim();
+  const tokenOauthUrl = String(token.oauthUrl || '').trim();
+  const isCurrent = Boolean(
+    activeToken
+    && activeToken.id === token.id
+    && (
+      !token.autoRunSessionId
+      || token.autoRunSessionId === latestSessionId
+      || token.autoRunSessionId === activeSessionId
+    )
+    && (
+      !tokenOauthUrl
+      || !latestOauthUrl
+      || tokenOauthUrl === latestOauthUrl
+    )
+  );
+  if (isCurrent) {
+    throwIfStopped();
+    return;
+  }
+
+  await logStaleStep9PhoneFlow(token, actionLabel);
+  throw new Error(`${PHONE_FLOW_STALE_ERROR_PREFIX}Step 9 phone flow is stale${actionLabel ? ` before ${actionLabel}` : ''}.`);
 }
 
 function normalizeAutoRunTimerPlan(plan) {
@@ -2117,6 +2211,9 @@ async function setIcloudAliasPreservedState(payload = {}) {
 
 async function resetState() {
   console.log(LOG_PREFIX, 'Resetting all state');
+  if (typeof invalidateStep9PhoneFlow === 'function') {
+    invalidateStep9PhoneFlow('resetState');
+  }
   // Preserve settings and persistent data across resets
   const [prev, persistedSettings, persistedAliasState] = await Promise.all([
     chrome.storage.session.get([
@@ -7207,6 +7304,10 @@ async function handleStepData(step, payload) {
     case 1: {
       const updates = {};
       if (payload.oauthUrl) {
+        const latestState = await getState().catch(() => ({}));
+        if (String(latestState?.oauthUrl || '').trim() !== String(payload.oauthUrl || '').trim()) {
+          invalidateStep9PhoneFlow('oauthUrl updated');
+        }
         updates.oauthUrl = payload.oauthUrl;
         broadcastDataUpdate({ oauthUrl: payload.oauthUrl });
       }
@@ -7666,6 +7767,9 @@ async function requestStop(options = {}) {
   const timerPlan = getPendingAutoRunTimerPlan(state);
 
   if (timerPlan?.kind === AUTO_RUN_TIMER_KIND_SCHEDULED_START && !autoRunActive) {
+    if (typeof invalidateStep9PhoneFlow === 'function') {
+      invalidateStep9PhoneFlow('cancel scheduled auto-run');
+    }
     await cancelScheduledAutoRun({
       logMessage: options.logMessage === false
         ? false
@@ -7675,6 +7779,9 @@ async function requestStop(options = {}) {
   }
 
   if (timerPlan && !autoRunActive) {
+    if (typeof invalidateStep9PhoneFlow === 'function') {
+      invalidateStep9PhoneFlow('stop pending auto-run timer');
+    }
     autoRunCurrentRun = timerPlan.currentRun;
     autoRunTotalRuns = timerPlan.totalRuns;
     autoRunAttemptRun = timerPlan.attemptRun;
@@ -7702,6 +7809,9 @@ async function requestStop(options = {}) {
   if (stopRequested) return;
 
   stopRequested = true;
+  if (typeof invalidateStep9PhoneFlow === 'function') {
+    invalidateStep9PhoneFlow('requestStop');
+  }
   clearCurrentAutoRunSessionId();
   cancelPendingCommands();
   abortActiveIcloudRequests();
@@ -8973,6 +9083,7 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
 });
 const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.createPhoneVerificationHelpers({
   addLog,
+  assertStep9PhoneFlowCurrent,
   DEFAULT_HERO_SMS_BASE_URL,
   DEFAULT_HERO_SMS_REUSE_ENABLED,
   DEFAULT_PHONE_CODE_WAIT_SECONDS,
@@ -9312,6 +9423,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   setStepStatus,
   skipAutoRunCountdown,
   skipStep,
+  invalidateStep9PhoneFlow,
   startContributionFlow: (...args) => contributionOAuthManager?.startContributionFlow?.(...args),
   startAutoRunLoop,
   pollContributionStatus: (...args) => contributionOAuthManager?.pollContributionStatus?.(...args),
@@ -10256,8 +10368,9 @@ async function getStep8PageState(tabId, responseTimeoutMs = 1500) {
   }
 }
 
-async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS) {
+async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS, options = {}) {
   const normalizedTimeoutMs = Math.max(1000, Number(timeoutMs) || STEP8_READY_WAIT_TIMEOUT_MS);
+  const { phoneFlowToken = null } = options || {};
   let waitStartedAt = Date.now();
   let recovered = false;
   let phoneVerificationRecovered = false;
@@ -10302,7 +10415,9 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
             : `步骤 9：当前认证页进入手机号页面，但未开启接码功能，无法继续自动授权。${urlPart}`.trim()
         );
       }
-      const phoneResult = await phoneVerificationHelpers.completePhoneVerificationFlow(tabId, pageState);
+      const phoneResult = await phoneVerificationHelpers.completePhoneVerificationFlow(tabId, pageState, {
+        phoneFlowToken,
+      });
       if (phoneResult?.consentReady) {
         return phoneResult;
       }
@@ -10665,6 +10780,7 @@ const step9Executor = self.MultiPageBackgroundStep9?.createStep9Executor({
   cleanupStep8NavigationListeners,
   clickWithDebugger,
   completeStepFromBackground,
+  createStep9PhoneFlowToken,
   ensureStep8SignupPageReady,
   getOAuthFlowStepTimeoutMs,
   getStep8CallbackUrlFromNavigation,

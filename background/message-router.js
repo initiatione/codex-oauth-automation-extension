@@ -104,6 +104,7 @@
       skipStep,
       startContributionFlow,
       startAutoRunLoop,
+      invalidateStep9PhoneFlow,
       deleteMail2925Account,
       deleteMail2925Accounts,
       syncHotmailAccounts,
@@ -222,6 +223,12 @@
       if (step === 1) {
         const updates = {};
         if (payload.oauthUrl) {
+          if (typeof invalidateStep9PhoneFlow === 'function') {
+            const latestState = typeof getState === 'function' ? await getState().catch(() => ({})) : {};
+            if (String(latestState?.oauthUrl || '').trim() !== String(payload.oauthUrl || '').trim()) {
+              invalidateStep9PhoneFlow('oauthUrl updated');
+            }
+          }
           updates.oauthUrl = payload.oauthUrl;
           broadcastDataUpdate({ oauthUrl: payload.oauthUrl });
         }
