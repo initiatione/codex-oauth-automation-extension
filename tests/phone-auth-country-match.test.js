@@ -128,6 +128,43 @@ function createFakeAddPhoneDom() {
   };
 }
 
+function createFakePhoneVerificationDom() {
+  let resendClicked = false;
+  const resendButton = {
+    disabled: false,
+    textContent: '重新发送短信',
+    click() {
+      resendClicked = true;
+    },
+    getAttribute(name) {
+      return name === 'value' ? 'resend' : '';
+    },
+  };
+
+  const form = {
+    querySelectorAll(selector) {
+      if (selector === 'button, input[type="submit"], input[type="button"]') {
+        return [resendButton];
+      }
+      return [];
+    },
+  };
+
+  const document = {
+    querySelector(selector) {
+      if (selector === 'form[action*="/phone-verification" i]') {
+        return form;
+      }
+      return null;
+    },
+  };
+
+  return {
+    document,
+    wasResendClicked: () => resendClicked,
+  };
+}
+
 test('phone auth matches english HeroSMS country labels against localized add-phone options', async () => {
   const originalDocument = global.document;
   const originalEvent = global.Event;
@@ -197,5 +234,125 @@ test('phone auth matches english HeroSMS country labels against localized add-ph
     global.Event = originalEvent;
     global.location = originalLocation;
     Intl.DisplayNames = OriginalDisplayNames;
+  }
+});
+
+test('phone auth reports banned-number error after resend click', async () => {
+  const originalDocument = global.document;
+  const originalLocation = global.location;
+  const dom = createFakePhoneVerificationDom();
+  let pageText = '';
+
+  global.document = dom.document;
+  global.location = { href: 'https://auth.openai.com/phone-verification' };
+
+  try {
+    const helpers = api.createPhoneAuthHelpers({
+      fillInput: () => {},
+      getActionText: (element) => element?.textContent || '',
+      getPageTextSnapshot: () => pageText,
+      getVerificationErrorText: () => '',
+      humanPause: async () => {},
+      isActionEnabled: () => true,
+      isAddPhonePageReady: () => false,
+      isConsentReady: () => false,
+      isPhoneVerificationPageReady: () => true,
+      isVisibleElement: () => true,
+      simulateClick: (element) => {
+        element.click?.();
+        pageText = '无法向此电话号码发送短信';
+      },
+      sleep: async () => {},
+      throwIfStopped: () => {},
+      waitForElement: async () => null,
+    });
+
+    await assert.rejects(
+      () => helpers.resendPhoneVerificationCode(1000),
+      /PHONE_RESEND_BANNED_NUMBER::无法向此电话号码发送短信/
+    );
+    assert.equal(dom.wasResendClicked(), true);
+  } finally {
+    global.document = originalDocument;
+    global.location = originalLocation;
+  }
+});
+
+test('phone auth still reports normal resend success when no resend error appears', async () => {
+  const originalDocument = global.document;
+  const originalLocation = global.location;
+  const dom = createFakePhoneVerificationDom();
+
+  global.document = dom.document;
+  global.location = { href: 'https://auth.openai.com/phone-verification' };
+
+  try {
+    const helpers = api.createPhoneAuthHelpers({
+      fillInput: () => {},
+      getActionText: (element) => element?.textContent || '',
+      getPageTextSnapshot: () => '',
+      getVerificationErrorText: () => '',
+      humanPause: async () => {},
+      isActionEnabled: () => true,
+      isAddPhonePageReady: () => false,
+      isConsentReady: () => false,
+      isPhoneVerificationPageReady: () => true,
+      isVisibleElement: () => true,
+      simulateClick: (element) => element.click?.(),
+      sleep: async () => {},
+      throwIfStopped: () => {},
+      waitForElement: async () => null,
+    });
+
+    const result = await helpers.resendPhoneVerificationCode(1000);
+
+    assert.deepStrictEqual(result, {
+      resent: true,
+      url: 'https://auth.openai.com/phone-verification',
+    });
+    assert.equal(dom.wasResendClicked(), true);
+  } finally {
+    global.document = originalDocument;
+    global.location = originalLocation;
+  }
+});
+
+test('phone auth still reports resend throttling separately from banned number', async () => {
+  const originalDocument = global.document;
+  const originalLocation = global.location;
+  const dom = createFakePhoneVerificationDom();
+  let pageText = '';
+
+  global.document = dom.document;
+  global.location = { href: 'https://auth.openai.com/phone-verification' };
+
+  try {
+    const helpers = api.createPhoneAuthHelpers({
+      fillInput: () => {},
+      getActionText: (element) => element?.textContent || '',
+      getPageTextSnapshot: () => pageText,
+      getVerificationErrorText: () => '',
+      humanPause: async () => {},
+      isActionEnabled: () => true,
+      isAddPhonePageReady: () => false,
+      isConsentReady: () => false,
+      isPhoneVerificationPageReady: () => true,
+      isVisibleElement: () => true,
+      simulateClick: (element) => {
+        element.click?.();
+        pageText = 'Tried to resend too many times. Please try again later.';
+      },
+      sleep: async () => {},
+      throwIfStopped: () => {},
+      waitForElement: async () => null,
+    });
+
+    await assert.rejects(
+      () => helpers.resendPhoneVerificationCode(1000),
+      /PHONE_RESEND_THROTTLED::Tried to resend too many times/
+    );
+  } finally {
+    global.document = originalDocument;
+    global.location = originalLocation;
   }
 });

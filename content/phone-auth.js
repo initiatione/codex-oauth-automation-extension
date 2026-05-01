@@ -19,7 +19,9 @@
       waitForElement,
     } = deps;
     const PHONE_RESEND_THROTTLED_ERROR_PREFIX = 'PHONE_RESEND_THROTTLED::';
+    const PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX = 'PHONE_RESEND_BANNED_NUMBER::';
     const PHONE_RESEND_THROTTLED_PATTERN = /tried\s+to\s+resend\s+too\s+many\s+times|please\s+try\s+again\s+later|too\s+many\s+resend|resend\s+too\s+many|发送.*过于频繁|稍后再试|重试次数过多/i;
+    const PHONE_RESEND_BANNED_NUMBER_PATTERN = /无法向此电话号码发送短信|无法向此手机号发送短信|无法发送短信到此电话号码|无法发送短信到此手机号|can(?:not|'t)\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number|unable\s+to\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number/i;
 
     function dispatchInputEvents(element) {
       if (!element) return;
@@ -398,6 +400,22 @@
       return '';
     }
 
+    function getPhoneResendBannedNumberText() {
+      const inlineMatch = getPhoneVerificationInlineMessages()
+        .find((text) => PHONE_RESEND_BANNED_NUMBER_PATTERN.test(text));
+      if (inlineMatch) {
+        return inlineMatch;
+      }
+      const pageSnapshot = String(getPageTextSnapshot?.() || '').replace(/\s+/g, ' ').trim();
+      if (pageSnapshot && PHONE_RESEND_BANNED_NUMBER_PATTERN.test(pageSnapshot)) {
+        const concise = pageSnapshot.match(
+          /无法向此电话号码发送短信|无法向此手机号发送短信|无法发送短信到此电话号码|无法发送短信到此手机号|can(?:not|'t)\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number[^.。!?]*[.。!?]?|unable\s+to\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number[^.。!?]*[.。!?]?/i
+        );
+        return String(concise?.[0] || pageSnapshot).trim();
+      }
+      return '';
+    }
+
     async function waitForAddPhoneReady(timeout = 20000) {
       const start = Date.now();
       while (Date.now() - start < timeout) {
@@ -622,6 +640,10 @@
       const start = Date.now();
       while (Date.now() - start < timeout) {
         throwIfStopped();
+        const bannedNumberText = getPhoneResendBannedNumberText();
+        if (bannedNumberText) {
+          throw new Error(`${PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX}${bannedNumberText}`);
+        }
         const throttledText = getPhoneResendThrottleText();
         if (throttledText) {
           throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${throttledText}`);
@@ -631,6 +653,10 @@
           await humanPause(250, 700);
           simulateClick(resendButton);
           await sleep(1000);
+          const afterClickBannedNumberText = getPhoneResendBannedNumberText();
+          if (afterClickBannedNumberText) {
+            throw new Error(`${PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX}${afterClickBannedNumberText}`);
+          }
           const afterClickThrottleText = getPhoneResendThrottleText();
           if (afterClickThrottleText) {
             throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${afterClickThrottleText}`);
@@ -643,6 +669,10 @@
         await sleep(250);
       }
 
+      const timeoutBannedNumberText = getPhoneResendBannedNumberText();
+      if (timeoutBannedNumberText) {
+        throw new Error(`${PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX}${timeoutBannedNumberText}`);
+      }
       const timeoutThrottleText = getPhoneResendThrottleText();
       if (timeoutThrottleText) {
         throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${timeoutThrottleText}`);

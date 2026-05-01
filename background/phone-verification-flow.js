@@ -59,6 +59,7 @@
     const PHONE_CODE_TIMEOUT_ERROR_PREFIX = 'PHONE_CODE_TIMEOUT::';
     const PHONE_RESTART_STEP7_ERROR_PREFIX = 'PHONE_RESTART_STEP7::';
     const PHONE_RESEND_THROTTLED_ERROR_PREFIX = 'PHONE_RESEND_THROTTLED::';
+    const PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX = 'PHONE_RESEND_BANNED_NUMBER::';
     const PHONE_MANUAL_FREE_REUSE_ERROR_PREFIX = 'PHONE_MANUAL_FREE_REUSE::';
     const PHONE_SMS_FAILURE_SKIP_THRESHOLD = 2;
 
@@ -438,6 +439,17 @@
         return true;
       }
       return /tried\s+to\s+resend\s+too\s+many\s+times|please\s+try\s+again\s+later|too\s+many\s+resend|resend\s+too\s+many|发送.*过于频繁|稍后再试/i.test(message);
+    }
+
+    function isPhoneResendBannedNumberError(error) {
+      const message = String(error?.message || error || '').trim();
+      if (!message) {
+        return false;
+      }
+      if (message.startsWith(PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX)) {
+        return true;
+      }
+      return /无法向此电话号码发送短信|无法向此手机号发送短信|无法发送短信到此电话号码|无法发送短信到此手机号|can(?:not|'t)\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number|unable\s+to\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number/i.test(message);
     }
 
     function buildPhoneRestartStep7Error(phoneNumber = '') {
@@ -1551,6 +1563,17 @@
               resendTriggeredForCurrentNumber = true;
               await addLog('Step 9: clicked "Resend text message" on the phone verification page.', 'info');
             } catch (resendError) {
+              if (isPhoneResendBannedNumberError(resendError)) {
+                await addLog(
+                  `Step 9: OpenAI could not send SMS to ${normalizedActivation.phoneNumber}; replacing this number immediately. ${resendError.message}`,
+                  'warn'
+                );
+                return {
+                  code: '',
+                  replaceNumber: true,
+                  reason: 'resend_phone_banned',
+                };
+              }
               if (isPhoneResendThrottledError(resendError)) {
                 await addLog(
                   `Step 9: resend is throttled for ${normalizedActivation.phoneNumber}, replacing number immediately. ${resendError.message}`,
@@ -1818,6 +1841,24 @@
                   await resendPhoneVerificationCode(tabId);
                   await addLog('Step 9: clicked "Resend text message" after the phone code was rejected.', 'info');
                 } catch (resendError) {
+                  if (isPhoneResendBannedNumberError(resendError)) {
+                    shouldReplaceNumber = true;
+                    replaceReason = 'resend_phone_banned';
+                    await addLog(
+                      `Step 9: OpenAI could not send SMS to ${activation.phoneNumber}; replacing this number immediately. ${resendError.message}`,
+                      'warn'
+                    );
+                    break;
+                  }
+                  if (isPhoneResendThrottledError(resendError)) {
+                    shouldReplaceNumber = true;
+                    replaceReason = 'resend_throttled';
+                    await addLog(
+                      `Step 9: resend is throttled for ${activation.phoneNumber}, replacing number immediately. ${resendError.message}`,
+                      'warn'
+                    );
+                    break;
+                  }
                   await addLog(`Step 9: failed to click resend after code rejection. ${resendError.message}`, 'warn');
                 }
                 await addLog(
