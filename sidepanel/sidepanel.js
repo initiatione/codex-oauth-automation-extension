@@ -516,6 +516,7 @@ const DEFAULT_LUCKMAIL_BASE_URL = 'https://mails.luckyous.com';
 const DEFAULT_LUCKMAIL_EMAIL_TYPE = 'ms_graph';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = 'http://127.0.0.1:17373';
+const DEFAULT_RUN_COUNT = 1;
 const CONTRIBUTION_UPLOAD_URL = 'https://apikey.qzz.io/';
 const DEFAULT_PHONE_VERIFICATION_ENABLED = false;
 const DEFAULT_HERO_SMS_COUNTRY_ID = 52;
@@ -852,6 +853,7 @@ const normalizeLuckmailTimestampValue = window.LuckMailUtils?.normalizeTimestamp
   });
 const sidepanelUpdateService = window.SidepanelUpdateService;
 const contributionContentService = window.SidepanelContributionContentService;
+const runCountUtils = window.SidepanelRunCount || {};
 const sharedFormDialog = window.SidepanelFormDialog?.createFormDialog?.({
   overlay: sharedFormModal,
   titleNode: sharedFormModalTitle,
@@ -1970,6 +1972,38 @@ function syncRunCountFromConfiguredEmailPool(provider = selectMailProvider.value
   }
 }
 
+function normalizeRunCountValue(value, options = {}) {
+  if (typeof runCountUtils.normalizeRunCountValue === 'function') {
+    return runCountUtils.normalizeRunCountValue(value, {
+      min: DEFAULT_RUN_COUNT,
+      fallback: DEFAULT_RUN_COUNT,
+      ...options,
+    });
+  }
+  const numeric = Number(String(value ?? '').trim());
+  return Number.isFinite(numeric)
+    ? Math.max(DEFAULT_RUN_COUNT, Math.floor(numeric))
+    : DEFAULT_RUN_COUNT;
+}
+
+function normalizeRunCountInput(options = {}) {
+  if (shouldLockRunCountToEmailPool()) {
+    syncRunCountFromConfiguredEmailPool();
+    return getLockedRunCountFromEmailPool();
+  }
+  const normalized = typeof runCountUtils.writeNormalizedRunCount === 'function'
+    ? runCountUtils.writeNormalizedRunCount(inputRunCount, {
+      min: DEFAULT_RUN_COUNT,
+      fallback: DEFAULT_RUN_COUNT,
+      ...options,
+    })
+    : normalizeRunCountValue(inputRunCount?.value, options);
+  if (inputRunCount) {
+    inputRunCount.value = String(normalized);
+  }
+  return normalized;
+}
+
 function getRunCountValue() {
   const lockedRunCount = typeof getLockedRunCountFromEmailPool === 'function'
     ? getLockedRunCountFromEmailPool()
@@ -1977,7 +2011,7 @@ function getRunCountValue() {
   if (lockedRunCount > 0) {
     return lockedRunCount;
   }
-  return Math.max(1, parseInt(inputRunCount.value, 10) || 1);
+  return normalizeRunCountValue(inputRunCount?.value);
 }
 
 function updateFallbackThreadIntervalInputState() {
@@ -6731,7 +6765,7 @@ async function startAutoRunFromCurrentSettings() {
   if (customEmailPoolEnabled && lockedRunCount <= 0) {
     throw new Error('请先在邮箱池里至少填写 1 个邮箱。');
   }
-  const totalRuns = lockedRunCount > 0 ? lockedRunCount : getRunCountValue();
+  const totalRuns = lockedRunCount > 0 ? lockedRunCount : normalizeRunCountInput();
   if (lockedRunCount > 0) {
     inputRunCount.value = String(lockedRunCount);
   }
@@ -7752,13 +7786,17 @@ inputInbucketHost.addEventListener('blur', () => {
 inputRunCount.addEventListener('input', () => {
   updateFallbackThreadIntervalInputState();
 });
+inputRunCount.addEventListener('change', () => {
+  normalizeRunCountInput();
+  updateFallbackThreadIntervalInputState();
+});
 inputRunCount.addEventListener('blur', () => {
   if (shouldLockRunCountToEmailPool()) {
     syncRunCountFromConfiguredEmailPool();
     updateFallbackThreadIntervalInputState();
     return;
   }
-  inputRunCount.value = String(getRunCountValue());
+  normalizeRunCountInput();
   updateFallbackThreadIntervalInputState();
 });
 

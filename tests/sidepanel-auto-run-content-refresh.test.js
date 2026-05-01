@@ -51,6 +51,7 @@ function extractFunction(name) {
 function createApi({
   refreshImpl,
   runCount = 3,
+  lockedRunCount = 0,
   plusModeEnabled = false,
   plusRiskEnabled = false,
   plusRiskConfirmed = true,
@@ -71,7 +72,7 @@ const inputAutoSkipFailuresThreadIntervalMinutes = { value: '5' };
 const inputAutoDelayEnabled = { checked: false };
 const inputAutoDelayMinutes = { value: '30' };
 const btnAutoRun = { disabled: false, innerHTML: '' };
-const inputRunCount = { disabled: false };
+const inputRunCount = { disabled: false, value: ${JSON.stringify(String(runCount))} };
 const chrome = {
   runtime: {
     async sendMessage(message) {
@@ -89,6 +90,23 @@ async function persistCurrentSettingsForAction() {
   events.push({ type: 'sync-settings' });
 }
 function getRunCountValue() { return ${Math.max(1, Number(runCount) || 1)}; }
+function getLockedRunCountFromEmailPool() { return ${Math.max(0, Number(lockedRunCount) || 0)}; }
+function shouldLockRunCountToEmailPool() { return getLockedRunCountFromEmailPool() > 0; }
+function syncRunCountFromConfiguredEmailPool() {
+  inputRunCount.value = String(getLockedRunCountFromEmailPool());
+}
+function normalizeRunCountInput() {
+  const lockedRunCount = getLockedRunCountFromEmailPool();
+  if (lockedRunCount > 0) {
+    inputRunCount.value = String(lockedRunCount);
+    return lockedRunCount;
+  }
+  const numeric = Number(inputRunCount.value);
+  const normalized = Number.isFinite(numeric) ? Math.max(1, Math.floor(numeric)) : 1;
+  inputRunCount.value = String(normalized);
+  return normalized;
+}
+function usesCustomEmailPoolGenerator() { return false; }
 function normalizeAutoRunThreadIntervalMinutes(value) { return Number(value) || 0; }
 function shouldOfferAutoModeChoice() { return false; }
 async function openAutoStartChoiceDialog() { throw new Error('should not be called'); }
@@ -194,6 +212,27 @@ test('startAutoRunFromCurrentSettings shows Plus risk warning before starting mo
   );
   assert.equal(events[2].totalRuns, 4);
   assert.equal(events[3].message.payload.totalRuns, 4);
+});
+
+test('startAutoRunFromCurrentSettings sends selected manual totalRuns to background', async () => {
+  const api = createApi({ runCount: 5 });
+
+  const result = await api.startAutoRunFromCurrentSettings();
+  const sendEvent = api.getEvents().find((entry) => entry.type === 'send');
+
+  assert.equal(result, true);
+  assert.equal(sendEvent.message.type, 'AUTO_RUN');
+  assert.equal(sendEvent.message.payload.totalRuns, 5);
+});
+
+test('startAutoRunFromCurrentSettings sends locked pool totalRuns to background', async () => {
+  const api = createApi({ runCount: 99, lockedRunCount: 4 });
+
+  const result = await api.startAutoRunFromCurrentSettings();
+  const sendEvent = api.getEvents().find((entry) => entry.type === 'send');
+
+  assert.equal(result, true);
+  assert.equal(sendEvent.message.payload.totalRuns, 4);
 });
 
 test('startAutoRunFromCurrentSettings aborts when Plus risk warning is declined', async () => {

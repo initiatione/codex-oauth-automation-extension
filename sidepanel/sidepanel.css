@@ -444,7 +444,8 @@ header {
 }
 
 .run-count-input {
-  width: 42px;
+  width: 56px;
+  min-width: 56px;
   padding: 6px 4px;
   text-align: center;
   background: var(--bg-base);

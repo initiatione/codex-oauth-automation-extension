@@ -59,10 +59,25 @@ test('sidepanel run count input no longer hardcodes max=50', () => {
 
 test('sidepanel getRunCountValue no longer clamps run count to 50', () => {
   const source = fs.readFileSync('sidepanel/sidepanel.js', 'utf8');
-  const bundle = extractFunction(source, 'getRunCountValue');
+  const bundle = [
+    extractFunction(source, 'normalizeRunCountValue'),
+    extractFunction(source, 'getRunCountValue'),
+  ].join('\n');
 
   const api = new Function(`
+const DEFAULT_RUN_COUNT = 1;
 const inputRunCount = { value: '88' };
+const runCountUtils = {
+  normalizeRunCountValue(value, options = {}) {
+    const numeric = Number(String(value ?? '').trim());
+    return Number.isFinite(numeric)
+      ? Math.max(Number(options.min) || 1, Math.floor(numeric))
+      : Number(options.fallback) || 1;
+  },
+};
+function getLockedRunCountFromEmailPool() {
+  return 0;
+}
 ${bundle}
 return {
   getRunCountValue,
