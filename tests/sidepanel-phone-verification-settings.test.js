@@ -59,6 +59,10 @@ test('sidepanel html exposes phone verification toggle and dedicated HeroSMS row
   assert.match(html, /id="btn-toggle-phone-verification-section"/);
   assert.match(html, /id="row-phone-verification-fold"/);
   assert.match(html, /id="input-phone-verification-enabled"/);
+  assert.match(html, /data-layout-group="platform-basics"/);
+  assert.match(html, /data-layout-group="acquisition-strategy"/);
+  assert.match(html, /data-layout-group="sms-parameters"/);
+  assert.match(html, /data-layout-group="runtime-state"/);
   assert.match(html, /id="row-hero-sms-platform"/);
   assert.match(html, /id="row-hero-sms-country"/);
   assert.match(html, /id="row-hero-sms-country-fallback"/);
@@ -84,18 +88,50 @@ test('sidepanel html exposes phone verification toggle and dedicated HeroSMS row
   assert.match(html, /id="row-phone-resend-throttled-as-banned"/);
   assert.match(html, /id="input-phone-resend-throttled-as-banned"/);
   assert.match(html, /id="row-free-reusable-phone"/);
+  assert.match(html, /class="[^"]*hero-sms-free-phone-cell/);
+  assert.match(html, /class="[^"]*hero-sms-runtime-action/);
+  assert.match(html, /id="display-free-reusable-phone-country"/);
   assert.match(html, /id="display-free-reusable-phone"/);
+  assert.match(html, /id="input-free-reusable-phone"/);
+  assert.match(html, /id="btn-save-free-reusable-phone"/);
   assert.match(html, /id="btn-clear-free-reusable-phone"/);
   assert.match(html, /平台同号重激活/);
   assert.match(html, /白嫖复用/);
   assert.match(html, /自动白嫖复用/);
   assert.match(html, /限流大概率封号/);
   assert.match(html, /可能误判并丢弃仍可恢复的号码/);
-  assert.match(html, /白嫖号码/);
+  assert.match(html, /复用/);
+  assert.match(html, /复用手机号/);
   assert.match(html, /id="row-oauth-flow-timeout"/);
   assert.match(html, /id="input-oauth-flow-timeout-enabled"/);
   assert.match(html, /只取消 Step 7 后链总预算/);
   assert.doesNotMatch(html, /id="input-account-run-history-text-enabled"/);
+  assert.doesNotMatch(html, /id="row-account-run-history-helper-base-url"/);
+  assert.doesNotMatch(html, /同步服务/);
+});
+
+test('HeroSMS settings layout remains compact and two-column on narrow panels', () => {
+  const css = fs.readFileSync('sidepanel/sidepanel.css', 'utf8');
+
+  assert.match(css, /\.phone-verification-card \.data-label \{\s*width: 58px;/s);
+  assert.match(css, /\.hero-sms-price-controls-grid \{[\s\S]*grid-template-columns: repeat\(2, minmax\(128px, 1fr\)\);/);
+  assert.match(css, /\.hero-sms-settings-grid \{[\s\S]*grid-template-columns: repeat\(2, minmax\(128px, 1fr\)\);/);
+  assert.match(css, /@media \(max-width: 430px\) \{[\s\S]*\.hero-sms-price-controls-grid,\s*\.hero-sms-settings-grid \{[\s\S]*grid-template-columns: repeat\(2, minmax\(112px, 1fr\)\);/);
+  assert.doesNotMatch(css, /@media \(max-width: 430px\) \{[\s\S]*\.hero-sms-price-controls-grid,\s*\.hero-sms-settings-grid \{\s*grid-template-columns: 1fr;/);
+});
+
+test('free reusable phone save button records phone number through runtime messaging', () => {
+  const marker = "btnSaveFreeReusablePhone?.addEventListener('click', async () => {";
+  const start = sidepanelSource.indexOf(marker);
+  assert.notEqual(start, -1);
+  const end = sidepanelSource.indexOf("inputFreeReusablePhone?.addEventListener('keydown'", start);
+  assert.notEqual(end, -1);
+  const block = sidepanelSource.slice(start, end);
+
+  assert.match(block, /type:\s*'SET_FREE_REUSABLE_PHONE'/);
+  assert.match(block, /payload:\s*\{\s*phoneNumber\s*\}/s);
+  assert.match(block, /type:\s*'GET_STATE'/);
+  assert.match(block, /renderState\(latestState \|\| \{\}\)/);
 });
 
 test('free reusable phone clear button uses chrome runtime messaging directly', () => {

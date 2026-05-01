@@ -34,3 +34,28 @@ test('message router clears saved free reusable phone record', async () => {
   assert.deepStrictEqual(result, { ok: true });
   assert.equal(clearCalls, 1);
 });
+
+test('message router saves manual free reusable phone record', async () => {
+  const source = fs.readFileSync('background/message-router.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundMessageRouter;`)(globalScope);
+  const calls = [];
+
+  const router = api.createMessageRouter({
+    setFreeReusablePhoneActivation: async (payload) => {
+      calls.push(payload);
+      return { ok: true, freeReusablePhoneActivation: { phoneNumber: payload.phoneNumber } };
+    },
+  });
+
+  const result = await router.handleMessage({
+    type: 'SET_FREE_REUSABLE_PHONE',
+    payload: { phoneNumber: '6281534591237' },
+  }, {});
+
+  assert.deepStrictEqual(result, {
+    ok: true,
+    freeReusablePhoneActivation: { phoneNumber: '6281534591237' },
+  });
+  assert.deepStrictEqual(calls, [{ phoneNumber: '6281534591237' }]);
+});

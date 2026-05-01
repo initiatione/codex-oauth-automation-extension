@@ -11,6 +11,7 @@
       requestStop,
       sendToContentScriptResilient,
       setState,
+      broadcastDataUpdate,
       sleepWithStop,
       throwIfStopped,
       DEFAULT_HERO_SMS_BASE_URL = 'https://hero-sms.com/stubs/handler_api.php',
@@ -305,6 +306,37 @@
       };
     }
 
+    function normalizeManualFreeReusablePhoneActivation(record) {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) {
+        return null;
+      }
+      const phoneNumber = String(
+        record.phoneNumber ?? record.number ?? record.phone ?? ''
+      ).trim();
+      if (!phoneNumber) {
+        return null;
+      }
+      const activationId = String(
+        record.activationId ?? record.id ?? record.activation ?? ''
+      ).trim();
+      const countryLabel = String(record.countryLabel || '').trim();
+      const statusAction = String(record.statusAction || '').trim();
+      return {
+        ...(activationId ? { activationId } : {}),
+        phoneNumber,
+        provider: String(record.provider || 'hero-sms').trim() || 'hero-sms',
+        serviceCode: String(record.serviceCode || HERO_SMS_SERVICE_CODE).trim() || HERO_SMS_SERVICE_CODE,
+        countryId: normalizeCountryId(record.countryId, HERO_SMS_COUNTRY_ID),
+        ...(countryLabel ? { countryLabel } : {}),
+        successfulUses: normalizeUseCount(record.successfulUses),
+        maxUses: Math.max(1, Math.floor(Number(record.maxUses) || DEFAULT_PHONE_NUMBER_MAX_USES)),
+        ...(statusAction ? { statusAction } : {}),
+        source: 'free-manual-reuse',
+        recordedAt: Math.max(0, Number(record.recordedAt) || Date.now()),
+        manualOnly: !activationId,
+      };
+    }
+
     function hasReceivedPhoneCode(activation) {
       return normalizeActivation(activation)?.phoneCodeReceived === true;
     }
@@ -334,7 +366,7 @@
     }
 
     function normalizeFreeReusablePhoneActivation(record) {
-      const normalized = normalizeActivation(record);
+      const normalized = normalizeActivation(record) || normalizeManualFreeReusablePhoneActivation(record);
       if (!normalized) {
         return null;
       }
@@ -1134,6 +1166,13 @@
           message: 'Free reusable phone activation is missing.',
         };
       }
+      if (!String(normalizedActivation.activationId || '').trim()) {
+        return {
+          ok: false,
+          reason: 'missing_activation_id',
+          message: 'Saved free reusable phone has no HeroSMS activation ID; automatic free reuse cannot reactivate it.',
+        };
+      }
 
       const statusAction = resolveActivationStatusAction(normalizedActivation);
       const config = resolvePhoneConfig(state);
@@ -1558,6 +1597,11 @@
       await setState({
         [FREE_REUSABLE_PHONE_ACTIVATION_STATE_KEY]: activation ? persistedActivation : null,
       });
+      if (typeof broadcastDataUpdate === 'function') {
+        broadcastDataUpdate({
+          [FREE_REUSABLE_PHONE_ACTIVATION_STATE_KEY]: activation ? persistedActivation : null,
+        });
+      }
     }
 
     async function clearCurrentActivation() {
@@ -1721,6 +1765,10 @@
         ...(countryConfig.label ? { countryLabel: countryConfig.label } : {}),
         recordedAt: Date.now(),
       });
+      await addLog(
+        `Step 9: saved free reusable phone ${normalizedActivation.phoneNumber} after receiving a valid SMS code.`,
+        'info'
+      );
     }
 
     async function handoffFreeReusablePhone(tabId, state) {

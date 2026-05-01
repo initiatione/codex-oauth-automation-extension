@@ -340,6 +340,9 @@ const displayHeroSmsCurrentNumber = document.getElementById('display-hero-sms-cu
 const displayHeroSmsPriceTiers = document.getElementById('display-hero-sms-price-tiers');
 const displayHeroSmsCurrentCode = document.getElementById('display-hero-sms-current-code');
 const displayFreeReusablePhone = document.getElementById('display-free-reusable-phone');
+const displayFreeReusablePhoneCountry = document.getElementById('display-free-reusable-phone-country');
+const inputFreeReusablePhone = document.getElementById('input-free-reusable-phone');
+const btnSaveFreeReusablePhone = document.getElementById('btn-save-free-reusable-phone');
 const btnClearFreeReusablePhone = document.getElementById('btn-clear-free-reusable-phone');
 const displayHeroSmsCountryFallbackOrder = document.getElementById('display-hero-sms-country-fallback-order');
 const rowAccountRunHistoryHelperBaseUrl = document.getElementById('row-account-run-history-helper-base-url');
@@ -3424,11 +3427,23 @@ function updateHeroSmsRuntimeDisplay(state = {}) {
     const countryLabel = normalizeHeroSmsCountryLabel(
       activation?.countryLabel || getHeroSmsCountryLabelById(activation?.countryId || '')
     );
-    const recordedAt = Number(activation?.recordedAt) || 0;
-    const recordedText = recordedAt ? new Date(recordedAt).toLocaleString() : '';
     displayFreeReusablePhone.textContent = phoneNumber
-      ? `${phoneNumber}${activationId ? ` (#${activationId})` : ''}${countryLabel ? ` / ${countryLabel}` : ''}${recordedText ? ` / ${recordedText}` : ''}`
+      ? `${phoneNumber}${activationId ? ` (#${activationId})` : ''}${countryLabel ? ` / ${countryLabel}` : ''}`
       : '未记录';
+  }
+  if (displayFreeReusablePhoneCountry) {
+    const activation = state?.freeReusablePhoneActivation || null;
+    const countryLabel = normalizeHeroSmsCountryLabel(
+      activation?.countryLabel
+      || getHeroSmsCountryLabelById(activation?.countryId || '')
+      || state?.heroSmsCountryLabel
+      || getHeroSmsCountryLabelById(state?.heroSmsCountryId || '')
+    );
+    displayFreeReusablePhoneCountry.textContent = `地区：${countryLabel}`;
+  }
+  if (inputFreeReusablePhone) {
+    const activation = state?.freeReusablePhoneActivation || null;
+    inputFreeReusablePhone.value = String(activation?.phoneNumber || '').trim();
   }
 }
 
@@ -5676,6 +5691,10 @@ function updateButtonStates() {
   }
   if (checkboxAutoDeleteIcloud) checkboxAutoDeleteIcloud.disabled = disableIcloudControls;
   if (btnContributionMode) btnContributionMode.disabled = isContributionButtonLocked();
+  const disableFreeReusablePhoneControls = anyRunning || autoScheduled || autoLocked;
+  if (inputFreeReusablePhone) inputFreeReusablePhone.disabled = disableFreeReusablePhoneControls;
+  if (btnSaveFreeReusablePhone) btnSaveFreeReusablePhone.disabled = disableFreeReusablePhoneControls;
+  if (btnClearFreeReusablePhone) btnClearFreeReusablePhone.disabled = disableFreeReusablePhoneControls;
   updateStopButtonState(anyRunning || autoScheduled || isAutoRunPausedPhase() || autoLocked);
   renderContributionMode();
 }
@@ -7916,6 +7935,34 @@ btnClearFreeReusablePhone?.addEventListener('click', async () => {
     showToast('已清除白嫖复用手机号', 'ok');
   } catch (error) {
     showToast(`清除失败：${error?.message || error}`, 'error');
+  }
+});
+
+btnSaveFreeReusablePhone?.addEventListener('click', async () => {
+  const phoneNumber = String(inputFreeReusablePhone?.value || '').trim();
+  if (!phoneNumber) {
+    showToast('请先填写白嫖复用手机号', 'warn');
+    inputFreeReusablePhone?.focus();
+    return;
+  }
+  try {
+    await chrome.runtime.sendMessage({
+      type: 'SET_FREE_REUSABLE_PHONE',
+      source: 'sidepanel',
+      payload: { phoneNumber },
+    });
+    const latestState = await chrome.runtime.sendMessage({ type: 'GET_STATE', source: 'sidepanel' });
+    renderState(latestState || {});
+    showToast('已记录白嫖复用手机号', 'ok');
+  } catch (error) {
+    showToast(`记录失败：${error?.message || error}`, 'error');
+  }
+});
+
+inputFreeReusablePhone?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    btnSaveFreeReusablePhone?.click();
   }
 });
 

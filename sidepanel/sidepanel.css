@@ -838,6 +838,11 @@ header {
   margin-top: 10px;
 }
 
+.phone-verification-card .data-label {
+  width: 58px;
+  letter-spacing: 0.02em;
+}
+
 .phone-verification-header-actions {
   flex: 0 0 auto;
   align-items: center;
@@ -862,9 +867,25 @@ header {
 .phone-verification-fold-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   border-top: none;
   padding-top: 0;
+}
+
+.phone-verification-layout-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.phone-verification-layout-group + .phone-verification-layout-group {
+  padding-top: 2px;
+}
+
+.phone-verification-layout-group .data-row {
+  gap: 6px;
+  min-width: 0;
 }
 
 .ip-proxy-layout-row {
@@ -1949,7 +1970,7 @@ header {
 }
 
 .auto-delay-input {
-  width: 72px;
+  width: 68px;
   flex: 0 0 auto;
   text-align: center;
 }
@@ -2007,7 +2028,7 @@ header {
 .hero-sms-country-menu {
   position: relative;
   flex: 1;
-  min-width: 260px;
+  min-width: 0;
 }
 
 .hero-sms-country-menu-btn {
@@ -2083,11 +2104,13 @@ header {
   font-weight: 700;
 }
 
-.hero-sms-runtime-grid {
+.hero-sms-runtime-strip {
   width: 100%;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 12px;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
 }
 
 .hero-sms-runtime-cell {
@@ -2112,13 +2135,64 @@ header {
 .hero-sms-runtime-value {
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hero-sms-runtime-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.hero-sms-free-phone-cell {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hero-sms-runtime-hidden {
+  display: none !important;
+}
+
+.hero-sms-manual-phone-input {
+  width: 100%;
+  min-width: 0;
+  height: 31px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.hero-sms-free-phone-country {
+  flex: 0 0 auto;
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.hero-sms-runtime-action {
+  width: 38px;
+  min-width: 38px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 6px;
+  justify-content: center;
 }
 
 .hero-sms-price-preview-stack {
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
 }
 
 .hero-sms-price-preview-head {
@@ -2141,21 +2215,24 @@ header {
 .hero-sms-price-controls-grid {
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
+  grid-template-columns: repeat(2, minmax(128px, 1fr));
+  gap: 7px 8px;
+  min-width: 0;
 }
 
 .hero-sms-price-control {
-  display: flex;
+  display: grid;
+  grid-template-columns: max-content minmax(0, max-content);
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
+  justify-content: start;
   min-width: 0;
 }
 
 .hero-sms-price-control .setting-controls {
-  margin-left: auto;
-  width: 104px;
+  margin-left: 0;
+  width: auto;
+  min-width: 78px;
   justify-content: flex-start;
 }
 
@@ -2174,7 +2251,8 @@ header {
 }
 
 .hero-sms-toggle-controls {
-  width: 104px;
+  width: auto;
+  min-width: 78px;
   justify-content: flex-start;
 }
 
@@ -2195,28 +2273,34 @@ header {
 .hero-sms-settings-grid {
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
+  grid-template-columns: repeat(2, minmax(128px, 1fr));
+  gap: 7px 8px;
+  min-width: 0;
 }
 
 .hero-sms-settings-cell {
-  display: flex;
+  display: grid;
+  grid-template-columns: max-content minmax(0, max-content);
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
+  justify-content: start;
   min-width: 0;
 }
 
 .hero-sms-settings-cell .setting-controls {
-  margin-left: auto;
+  margin-left: 0;
+  width: auto;
+  min-width: 78px;
+  justify-content: flex-start;
 }
 
 .hero-sms-settings-caption {
-  flex: 0 0 auto;
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.35;
 }
 
 .data-unit {
@@ -2224,8 +2308,70 @@ header {
   font-weight: 600;
   color: var(--text-muted);
   flex-shrink: 0;
-  min-width: 24px;
+  min-width: 18px;
   text-align: left;
+}
+
+@media (max-width: 640px) {
+  .hero-sms-free-phone-cell {
+    grid-template-columns: minmax(120px, 1fr) auto auto auto;
+  }
+}
+
+@media (max-width: 430px) {
+  .phone-verification-card .data-label {
+    width: 52px;
+  }
+
+  .phone-verification-fold-body {
+    gap: 9px;
+  }
+
+  .phone-verification-layout-group {
+    gap: 7px;
+  }
+
+  .hero-sms-price-controls-grid,
+  .hero-sms-settings-grid {
+    grid-template-columns: repeat(2, minmax(112px, 1fr));
+    gap: 6px;
+  }
+
+  .hero-sms-price-control,
+  .hero-sms-settings-cell {
+    grid-template-columns: max-content max-content;
+  }
+
+  .hero-sms-price-control .setting-controls,
+  .hero-sms-settings-cell .setting-controls,
+  .hero-sms-toggle-controls {
+    width: auto;
+    min-width: 76px;
+    justify-content: flex-start;
+  }
+
+  .hero-sms-runtime-cell,
+  .hero-sms-runtime-main {
+    align-items: center;
+  }
+
+  .hero-sms-runtime-key {
+    flex-basis: auto;
+  }
+
+  .hero-sms-free-phone-cell {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .hero-sms-free-phone-country {
+    grid-column: 1 / -1;
+    max-width: none;
+    order: 4;
+  }
+
+  .hero-sms-manual-phone-input {
+    min-width: 0;
+  }
 }
 
 /* Status Bar */

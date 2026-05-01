@@ -5595,6 +5595,39 @@ async function clearFreeReusablePhoneActivation() {
   return { ok: true };
 }
 
+async function setFreeReusablePhoneActivation(record = {}) {
+  const phoneNumber = String(record.phoneNumber || record.number || record.phone || '').trim();
+  if (!phoneNumber) {
+    throw new Error('请先填写白嫖复用手机号。');
+  }
+  const state = await getState();
+  const activationId = String(record.activationId || record.id || record.activation || '').trim();
+  const countryId = Number(record.countryId) || Number(state.heroSmsCountryId) || HERO_SMS_COUNTRY_ID;
+  const countryLabel = String(record.countryLabel || '').trim() || getHeroSmsCountryLabelById(countryId);
+  const activation = {
+    ...(activationId ? { activationId } : {}),
+    phoneNumber,
+    provider: 'hero-sms',
+    serviceCode: HERO_SMS_SERVICE_CODE,
+    countryId,
+    ...(countryLabel ? { countryLabel } : {}),
+    successfulUses: Math.max(0, Math.floor(Number(record.successfulUses) || 0)),
+    maxUses: Math.max(1, Math.floor(Number(record.maxUses) || DEFAULT_PHONE_NUMBER_MAX_USES)),
+    source: 'free-manual-reuse',
+    recordedAt: Date.now(),
+    manualOnly: !activationId,
+  };
+  await setState({ freeReusablePhoneActivation: activation });
+  broadcastDataUpdate({ freeReusablePhoneActivation: activation });
+  await addLog(
+    activationId
+      ? `已手动记录白嫖复用手机号 ${phoneNumber}（#${activationId}）。`
+      : `已手动记录白嫖复用手机号 ${phoneNumber}。未填写 HeroSMS 激活 ID，仅支持手动填号复用。`,
+    'ok'
+  );
+  return { ok: true, freeReusablePhoneActivation: activation };
+}
+
 // ============================================================
 // Tab Registry
 // ============================================================
@@ -8954,6 +8987,7 @@ const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.crea
   HERO_SMS_COUNTRY_LABEL,
   HERO_SMS_SERVICE_CODE,
   HERO_SMS_SERVICE_LABEL,
+  broadcastDataUpdate,
   sendToContentScriptResilient,
   setState,
   sleepWithStop,
@@ -9186,6 +9220,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   deleteAccountRunHistoryRecords: (...args) => deleteAndBroadcastAccountRunHistoryRecords(...args),
   clearAutoRunTimerAlarm,
   clearFreeReusablePhoneActivation,
+  setFreeReusablePhoneActivation,
   clearLuckmailRuntimeState,
   clearStopRequest,
   closeLocalhostCallbackTabs,
