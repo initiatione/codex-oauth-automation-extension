@@ -7729,13 +7729,27 @@ async function acquireTopLevelAuthChainExecution(step, state = {}) {
     };
   }
 
+  let settled = false;
   let settleExecution = () => {};
   const promise = new Promise((resolve) => {
     settleExecution = (error = null) => resolve({ error });
   });
+  const settle = (error = null) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    settleExecution(error);
+  };
   const execution = {
     step: normalizedStep,
     promise,
+    cancel(error = null) {
+      if (activeTopLevelAuthChainExecution === execution) {
+        activeTopLevelAuthChainExecution = null;
+      }
+      settle(error);
+    },
   };
   activeTopLevelAuthChainExecution = execution;
 
@@ -7745,9 +7759,16 @@ async function acquireTopLevelAuthChainExecution(step, state = {}) {
       if (activeTopLevelAuthChainExecution === execution) {
         activeTopLevelAuthChainExecution = null;
       }
-      settleExecution(error);
+      settle(error);
     },
   };
+}
+
+function cancelTopLevelAuthChainExecution(error = null) {
+  if (!activeTopLevelAuthChainExecution) {
+    return;
+  }
+  activeTopLevelAuthChainExecution.cancel(error);
 }
 
 async function markRunningStepsStopped() {
@@ -7809,6 +7830,9 @@ async function requestStop(options = {}) {
   if (stopRequested) return;
 
   stopRequested = true;
+  if (typeof cancelTopLevelAuthChainExecution === 'function') {
+    cancelTopLevelAuthChainExecution(new Error(STOP_ERROR_MESSAGE));
+  }
   if (typeof invalidateStep9PhoneFlow === 'function') {
     invalidateStep9PhoneFlow('requestStop');
   }
@@ -7898,6 +7922,7 @@ async function executeStep(step, options = {}) {
       visibleStep: Number(step),
       stepDefinition: getStepDefinitionForState(step, state),
     });
+    throwIfStopped();
   } catch (err) {
     executionError = err;
     const errorState = await getState();

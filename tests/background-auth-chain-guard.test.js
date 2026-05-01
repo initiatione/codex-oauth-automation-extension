@@ -173,6 +173,122 @@ return {
   assert.ok(events.logs.some(({ message }) => /复用当前授权链/.test(message)));
 });
 
+test('requestStop cancels active auth chain before a later Step 9 click can join it', async () => {
+  const api = new Function(`
+const LOG_PREFIX = '[test]';
+const STOP_ERROR_MESSAGE = '流程已被用户停止。';
+const BROWSER_SWITCH_REQUIRED_ERROR_PREFIX = 'BROWSER_SWITCH_REQUIRED::';
+const AUTH_CHAIN_STEP_IDS = new Set([7, 8, 9, 10]);
+let activeTopLevelAuthChainExecution = null;
+let stopRequested = false;
+let releaseStep8 = null;
+const events = {
+  logs: [],
+  statusCalls: [],
+  registryCalls: [],
+};
+const state = {
+  stepStatuses: {},
+};
+
+async function addLog(message, level = 'info') {
+  events.logs.push({ message, level });
+}
+async function setStepStatus(step, status) {
+  state.stepStatuses[step] = status;
+  events.statusCalls.push({ step, status });
+}
+async function humanStepDelay() {}
+async function getState() {
+  return {
+    flowStartTime: null,
+    stepStatuses: { ...state.stepStatuses },
+  };
+}
+function getErrorMessage(error) {
+  return error?.message || String(error || '');
+}
+async function appendManualAccountRunRecordIfNeeded() {}
+function isTerminalSecurityBlockedError() {
+  return false;
+}
+async function handleCloudflareSecurityBlocked() {}
+function isBrowserSwitchRequiredError() {
+  return false;
+}
+async function handleBrowserSwitchRequired() {}
+function doesStepUseCompletionSignal() {
+  return false;
+}
+function isRetryableContentScriptTransportError() {
+  return false;
+}
+const stepRegistry = {
+  getStepDefinition(step) {
+    return { id: step, key: 'test-step' };
+  },
+  async executeStep(step) {
+    events.registryCalls.push(step);
+    if (step === 8) {
+      await new Promise((resolve) => {
+        releaseStep8 = resolve;
+      });
+    }
+  },
+};
+function getStepRegistryForState() {
+  return stepRegistry;
+}
+function getStepDefinitionForState(step) {
+  return { id: step, key: 'test-step' };
+}
+
+${extractFunction('isStopError')}
+${extractFunction('throwIfStopped')}
+${extractFunction('isAuthChainStep')}
+${extractFunction('acquireTopLevelAuthChainExecution')}
+${extractFunction('cancelTopLevelAuthChainExecution')}
+${extractFunction('executeStep')}
+
+return {
+  executeStep,
+  requestStop() {
+    stopRequested = true;
+    cancelTopLevelAuthChainExecution(new Error(STOP_ERROR_MESSAGE));
+  },
+  releaseStep8() {
+    if (releaseStep8) {
+      releaseStep8();
+    }
+  },
+  snapshot() {
+    return events;
+  },
+};
+`)();
+
+  const step8Run = api.executeStep(8);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  api.requestStop();
+
+  await assert.rejects(
+    () => api.executeStep(9),
+    /流程已被用户停止。/
+  );
+
+  api.releaseStep8();
+  await assert.rejects(step8Run, /流程已被用户停止。/);
+
+  const events = api.snapshot();
+  assert.deepStrictEqual(events.registryCalls, [8]);
+  assert.equal(
+    events.logs.some(({ message }) => /步骤 9.*复用当前授权链/.test(message)),
+    false,
+    'Step 9 should not join a stopped auth chain'
+  );
+});
+
 test('executeStep stops flow when browser-switch-required error is raised', async () => {
   const api = new Function(`
 const LOG_PREFIX = '[test]';
