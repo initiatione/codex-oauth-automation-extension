@@ -20,6 +20,7 @@
     } = deps;
     const PHONE_RESEND_THROTTLED_ERROR_PREFIX = 'PHONE_RESEND_THROTTLED::';
     const PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX = 'PHONE_RESEND_BANNED_NUMBER::';
+    const PHONE_MAX_USAGE_EXCEEDED_PATTERN = /phone_max_usage_exceeded/i;
     const PHONE_RESEND_THROTTLED_PATTERN = /tried\s+to\s+resend\s+too\s+many\s+times|please\s+try\s+again\s+later|too\s+many\s+resend|resend\s+too\s+many|发送.*过于频繁|稍后再试|重试次数过多/i;
     const PHONE_RESEND_BANNED_NUMBER_PATTERN = /无法向此电话号码发送短信|无法向此手机号发送短信|无法发送短信到此电话号码|无法发送短信到此手机号|can(?:not|'t)\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number|unable\s+to\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number/i;
 
@@ -310,6 +311,17 @@
       }) || null;
     }
 
+    function getAddPhoneRetryButton() {
+      const buttons = Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"]'));
+      return buttons.find((button) => {
+        if (!isVisibleElement(button) || !isActionEnabled(button)) {
+          return false;
+        }
+        const text = String(getActionText(button) || button.value || '').trim();
+        return /重试|retry|try\s+again/i.test(text);
+      }) || null;
+    }
+
     function getPhoneVerificationDisplayedPhone() {
       const text = getPageTextSnapshot();
       const matches = text.match(/\+\d[\d\s-]{6,}\d/g);
@@ -317,6 +329,11 @@
     }
 
     function getAddPhoneErrorText() {
+      const pageSnapshot = String(getPageTextSnapshot?.() || '').replace(/\s+/g, ' ').trim();
+      if (pageSnapshot && PHONE_MAX_USAGE_EXCEEDED_PATTERN.test(pageSnapshot)) {
+        return pageSnapshot;
+      }
+
       const form = getAddPhoneForm();
       if (!form) {
         return '';
@@ -350,7 +367,7 @@
       }
 
       const preferred = messages.find((text) => (
-        /already|used|linked|eligible|invalid|phone|号码|手机号|错误|失败|try\s+again/i.test(text)
+        /phone_max_usage_exceeded|already|used|linked|eligible|invalid|phone|号码|手机号|错误|失败|try\s+again/i.test(text)
       ));
       return preferred || messages[0] || '';
     }
@@ -417,6 +434,16 @@
     }
 
     function checkPhoneResendError() {
+      const maxUsageText = getAddPhoneErrorText();
+      if (maxUsageText && PHONE_MAX_USAGE_EXCEEDED_PATTERN.test(maxUsageText)) {
+        return {
+          hasError: true,
+          reason: 'phone_max_usage_exceeded',
+          message: maxUsageText,
+          url: location.href,
+        };
+      }
+
       const bannedNumberText = getPhoneResendBannedNumberText();
       if (bannedNumberText) {
         return {
@@ -463,6 +490,14 @@
       const start = Date.now();
       while (Date.now() - start < timeout) {
         throwIfStopped();
+        const pageErrorText = getAddPhoneErrorText();
+        if (pageErrorText && PHONE_MAX_USAGE_EXCEEDED_PATTERN.test(pageErrorText)) {
+          return {
+            addPhoneRejected: true,
+            errorText: pageErrorText,
+            url: location.href,
+          };
+        }
         if (isPhoneVerificationPageReady()) {
           return {
             phoneVerificationPage: true,
@@ -720,8 +755,25 @@
         };
       }
 
-      if (!isPhoneVerificationPageReady()) {
+      const maxUsageText = getAddPhoneErrorText();
+      if (!isPhoneVerificationPageReady() && !PHONE_MAX_USAGE_EXCEEDED_PATTERN.test(maxUsageText)) {
         throw new Error('The auth page is not currently on phone verification or add-phone page.');
+      }
+
+      const retryButton = getAddPhoneRetryButton();
+      if (retryButton) {
+        await humanPause(250, 700);
+        simulateClick(retryButton);
+        try {
+          await waitForAddPhoneReady(Math.min(timeout, 8000));
+          return {
+            addPhonePage: true,
+            retried: true,
+            url: location.href,
+          };
+        } catch {
+          // Fall back to direct add-phone navigation below.
+        }
       }
 
       location.assign('/add-phone');

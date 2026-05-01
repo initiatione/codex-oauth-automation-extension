@@ -90,6 +90,24 @@
       return Math.max(0, Math.floor(Number(value) || 0));
     }
 
+    function normalizePhoneDigits(value) {
+      return String(value || '').replace(/\D+/g, '');
+    }
+
+    function phoneNumbersMatch(left, right) {
+      const leftDigits = normalizePhoneDigits(left);
+      const rightDigits = normalizePhoneDigits(right);
+      return Boolean(
+        leftDigits
+        && rightDigits
+        && (
+          leftDigits === rightDigits
+          || leftDigits.endsWith(rightDigits)
+          || rightDigits.endsWith(leftDigits)
+        )
+      );
+    }
+
     function normalizePhoneReplacementLimit(value) {
       const parsed = Math.floor(Number(value));
       if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -131,6 +149,14 @@
         return false;
       }
       return /already\s+linked\s+to\s+the\s+maximum\s+number\s+of\s+accounts|phone\s+number\s+is\s+already\s+(?:in\s+use|linked|registered)|phone\s+number\s+has\s+already\s+been\s+used|already\s+associated\s+with\s+another\s+account|not\s+eligible\s+to\s+be\s+used|cannot\s+be\s+used\s+for\s+verification|号码.*(?:已|被).*(?:使用|占用|绑定|注册)|手机号.*(?:已|被).*(?:使用|占用|绑定|注册)|该手机号.*(?:已|被).*(?:使用|占用|绑定|注册)/i.test(text);
+    }
+
+    function isPhoneMaxUsageExceededError(value) {
+      const text = String(value || '').trim();
+      if (!text) {
+        return false;
+      }
+      return /phone_max_usage_exceeded|maximum\s+(?:usage|use)\s+(?:limit|count).*phone|phone\s+(?:usage|use).*exceed|验证过程中出错.*phone_max_usage_exceeded/i.test(text);
     }
 
     function normalizeCountryId(value, fallback = HERO_SMS_COUNTRY_ID) {
@@ -592,6 +618,15 @@
       return new Error(
         `${PHONE_RESTART_STEP7_ERROR_PREFIX}Phone verification could not receive an SMS after resend. Restart step 7 with a new number.${suffix}`
       );
+    }
+
+    function buildPhoneMaxUsageExceededError(message = '') {
+      return new Error(`PHONE_MAX_USAGE_EXCEEDED::${message || 'OpenAI reported phone_max_usage_exceeded for this phone number.'}`);
+    }
+
+    function isPhoneMaxUsageExceededFlowError(error) {
+      const message = String(error?.message || error || '').trim();
+      return message.startsWith('PHONE_MAX_USAGE_EXCEEDED::') || isPhoneMaxUsageExceededError(message);
     }
 
     function sanitizePhoneCodeTimeoutError(error) {
@@ -1711,6 +1746,13 @@
             message: error.message,
           };
         }
+        if (isPhoneMaxUsageExceededFlowError(error)) {
+          return {
+            hasError: true,
+            reason: 'phone_max_usage_exceeded',
+            message: error.message,
+          };
+        }
         await addLog(`Step 9: ignored transient phone resend error probe failure. ${error.message}`, 'warn');
         return {
           hasError: false,
@@ -1802,6 +1844,84 @@
 
     async function clearFreeReusableActivation() {
       await persistFreeReusableActivation(null);
+    }
+
+    async function discardPhoneActivationFromReuse(reason = '', options = {}) {
+      const latestState = typeof getState === 'function' ? await getState() : {};
+      const state = attachPhoneFlowTokenToState(
+        {
+          ...(options?.state || {}),
+          ...(latestState || {}),
+        },
+        options?.phoneFlowToken || options?.activation?.__phoneFlowToken || options?.state?.__phoneFlowToken || null
+      );
+      const activation = attachPhoneFlowTokenToActivation(
+        normalizeActivation(options?.activation),
+        state?.__phoneFlowToken || options?.phoneFlowToken || null
+      );
+      await assertPhoneFlowCurrent({
+        actionLabel: 'discard phone activation from reuse',
+        state,
+        activation,
+        phoneFlowToken: state?.__phoneFlowToken || options?.phoneFlowToken || null,
+      });
+
+      const rejectedPhoneNumber = String(
+        options?.phoneNumber || activation?.phoneNumber || ''
+      ).trim();
+      const updates = {};
+      let clearedCurrent = false;
+      let clearedReusable = false;
+      let clearedFreeReusable = false;
+
+      const currentActivation = normalizeActivation(state[PHONE_ACTIVATION_STATE_KEY]);
+      if (phoneNumbersMatch(currentActivation?.phoneNumber, rejectedPhoneNumber)) {
+        updates[PHONE_ACTIVATION_STATE_KEY] = null;
+        updates[PHONE_VERIFICATION_CODE_STATE_KEY] = '';
+        clearedCurrent = true;
+      }
+
+      const reusableActivation = normalizeActivation(state[REUSABLE_PHONE_ACTIVATION_STATE_KEY]);
+      if (phoneNumbersMatch(reusableActivation?.phoneNumber, rejectedPhoneNumber)) {
+        updates[REUSABLE_PHONE_ACTIVATION_STATE_KEY] = null;
+        clearedReusable = true;
+      }
+
+      const freeReusableActivation = normalizeFreeReusablePhoneActivation(state[FREE_REUSABLE_PHONE_ACTIVATION_STATE_KEY]);
+      if (phoneNumbersMatch(freeReusableActivation?.phoneNumber, rejectedPhoneNumber)) {
+        updates[FREE_REUSABLE_PHONE_ACTIVATION_STATE_KEY] = null;
+        clearedFreeReusable = true;
+      }
+
+      if (!Object.keys(updates).length) {
+        return {
+          clearedCurrent,
+          clearedReusable,
+          clearedFreeReusable,
+        };
+      }
+
+      await setState(updates);
+      if (clearedFreeReusable && typeof broadcastDataUpdate === 'function') {
+        broadcastDataUpdate({
+          [FREE_REUSABLE_PHONE_ACTIVATION_STATE_KEY]: null,
+        });
+      }
+
+      const clearParts = [
+        clearedCurrent ? 'current activation' : '',
+        clearedReusable ? 'paid reusable record' : '',
+        clearedFreeReusable ? 'free reusable record' : '',
+      ].filter(Boolean);
+      await addLog(
+        `Step 9: discarded phone ${rejectedPhoneNumber || 'unknown'} from reuse because ${reason || 'OpenAI rejected it'}. Cleared: ${clearParts.join(', ')}.`,
+        'warn'
+      );
+      return {
+        clearedCurrent,
+        clearedReusable,
+        clearedFreeReusable,
+      };
     }
 
     function isFreeAutoReuseActivation(activation) {
@@ -2079,6 +2199,9 @@
                 if (pageError?.reason === 'resend_phone_banned') {
                   throw new Error(`${PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX}${pageError.message || 'OpenAI could not send SMS to this phone number.'}`);
                 }
+                if (pageError?.reason === 'phone_max_usage_exceeded') {
+                  throw buildPhoneMaxUsageExceededError(pageError.message);
+                }
                 if (pageError?.reason === 'resend_throttled') {
                   if (shouldTreatResendThrottledAsBanned(state)) {
                     throw buildHighRiskResendThrottledError(pageError.message);
@@ -2123,6 +2246,17 @@
               code: '',
               replaceNumber: true,
               reason: 'resend_phone_banned',
+            };
+          }
+          if (isPhoneMaxUsageExceededFlowError(error)) {
+            await addLog(
+              `Step 9: OpenAI reported phone_max_usage_exceeded for ${normalizedActivation.phoneNumber} during SMS wait; replacing this number immediately. ${error.message}`,
+              'warn'
+            );
+            return {
+              code: '',
+              replaceNumber: true,
+              reason: 'phone_max_usage_exceeded',
             };
           }
           if (isPhoneResendThrottledError(error)) {
@@ -2382,28 +2516,67 @@
             let submitResult = await submitPhoneNumber(tabId, activation.phoneNumber, activation);
             if (submitResult.addPhoneRejected) {
               const addPhoneRejectText = String(submitResult.errorText || submitResult.url || 'unknown error');
-              if (isPhoneNumberUsedError(addPhoneRejectText)) {
+              const addPhoneMaxUsageExceeded = isPhoneMaxUsageExceededError(addPhoneRejectText);
+              if (addPhoneMaxUsageExceeded || isPhoneNumberUsedError(addPhoneRejectText)) {
                 usedNumberReplacementAttempts += 1;
                 if (usedNumberReplacementAttempts > maxNumberReplacementAttempts) {
                   throw new Error(
-                    `Step 9: phone verification did not succeed after ${maxNumberReplacementAttempts} number replacements. Last reason: phone_number_used.`
+                    `Step 9: phone verification did not succeed after ${maxNumberReplacementAttempts} number replacements. Last reason: ${addPhoneMaxUsageExceeded ? 'phone_max_usage_exceeded' : 'phone_number_used'}.`
                   );
                 }
 
-                await addLog(
-                  `Step 9: add-phone rejected ${activation.phoneNumber} as already used (${addPhoneRejectText}), replacing number (${usedNumberReplacementAttempts}/${maxNumberReplacementAttempts}).`,
-                  'warn'
-                );
-                if (isFreeAutoReuseActivation(activation)) {
-                  await retireFreeReusableActivation(
-                    `Automatic free reuse phone ${activation.phoneNumber} was rejected as already used.`,
+                if (addPhoneMaxUsageExceeded) {
+                  await discardPhoneActivationFromReuse(
+                    `OpenAI reported phone_max_usage_exceeded (${addPhoneRejectText})`,
                     { state, activation, phoneFlowToken }
                   );
+                  await addLog(
+                    `Step 9: add-phone reported phone_max_usage_exceeded for ${activation.phoneNumber}; returning to add-phone and retrying with a fresh number (${usedNumberReplacementAttempts}/${maxNumberReplacementAttempts}).`,
+                    'warn'
+                  );
+                } else {
+                  await addLog(
+                    `Step 9: add-phone rejected ${activation.phoneNumber} as already used (${addPhoneRejectText}), replacing number (${usedNumberReplacementAttempts}/${maxNumberReplacementAttempts}).`,
+                    'warn'
+                  );
+                  if (isFreeAutoReuseActivation(activation)) {
+                    await retireFreeReusableActivation(
+                      `Automatic free reuse phone ${activation.phoneNumber} was rejected as already used.`,
+                      { state, activation, phoneFlowToken }
+                    );
+                  }
                 }
                 if (shouldCancelActivation && activation) {
                   await cancelPhoneActivation(state, activation);
                 }
-                await clearCurrentActivation();
+                if (!addPhoneMaxUsageExceeded) {
+                  await clearCurrentActivation();
+                }
+                let returnResult = {};
+                if (addPhoneMaxUsageExceeded) {
+                  try {
+                    await assertPhoneFlowCurrent({
+                      actionLabel: 'return to add-phone after max usage',
+                      state,
+                      activation,
+                      phoneFlowToken,
+                    });
+                    returnResult = await returnToAddPhone(tabId, {
+                      state,
+                      activation,
+                      phoneFlowToken,
+                    });
+                    await addLog(
+                      'Step 9: returned to add-phone after phone_max_usage_exceeded; retrying with a fresh number.',
+                      'warn'
+                    );
+                  } catch (returnError) {
+                    if (isStalePhoneFlowError(returnError)) {
+                      throw returnError;
+                    }
+                    await addLog(`Step 9: failed to return to add-phone after phone_max_usage_exceeded. ${returnError.message}`, 'warn');
+                  }
+                }
                 activation = null;
                 shouldCancelActivation = false;
                 preferReuseExistingActivationOnAddPhone = false;
@@ -2411,6 +2584,7 @@
                 pageState = {
                   ...pageState,
                   ...submitResult,
+                  ...returnResult,
                   addPhonePage: true,
                   phoneVerificationPage: false,
                 };
@@ -2508,13 +2682,25 @@
 
             if (submitResult.invalidCode) {
               const invalidErrorText = String(submitResult.errorText || submitResult.url || 'unknown error');
-              if (isPhoneNumberUsedError(invalidErrorText)) {
+              if (isPhoneMaxUsageExceededError(invalidErrorText) || isPhoneNumberUsedError(invalidErrorText)) {
                 shouldReplaceNumber = true;
-                replaceReason = 'phone_number_used';
-                await addLog(
-                  `Step 9: phone number was rejected as already used (${invalidErrorText}), replacing with a new number immediately.`,
-                  'warn'
-                );
+                if (isPhoneMaxUsageExceededError(invalidErrorText)) {
+                  replaceReason = 'phone_max_usage_exceeded';
+                  await discardPhoneActivationFromReuse(
+                    `OpenAI reported phone_max_usage_exceeded (${invalidErrorText})`,
+                    { state, activation, phoneFlowToken }
+                  );
+                  await addLog(
+                    `Step 9: phone number ${activation.phoneNumber} reached OpenAI max usage (${invalidErrorText}), replacing with a fresh number immediately.`,
+                    'warn'
+                  );
+                } else {
+                  replaceReason = 'phone_number_used';
+                  await addLog(
+                    `Step 9: phone number was rejected as already used (${invalidErrorText}), replacing with a new number immediately.`,
+                    'warn'
+                  );
+                }
                 break;
               }
 
@@ -2628,10 +2814,22 @@
               { state, activation, phoneFlowToken }
             );
           }
+          if (replaceReason === 'phone_max_usage_exceeded') {
+            await discardPhoneActivationFromReuse(
+              'OpenAI reported phone_max_usage_exceeded during phone verification',
+              { state, activation, phoneFlowToken }
+            );
+            await addLog(
+              `Step 9: phone ${activation.phoneNumber} reached OpenAI max usage; removed matching reuse records before replacement.`,
+              'warn'
+            );
+          }
           if (shouldCancelActivation && activation) {
             await cancelPhoneActivation(state, activation);
           }
-          await clearCurrentActivation();
+          if (replaceReason !== 'phone_max_usage_exceeded') {
+            await clearCurrentActivation();
+          }
           activation = null;
           shouldCancelActivation = false;
           addPhoneReentryWithSameActivation = 0;
