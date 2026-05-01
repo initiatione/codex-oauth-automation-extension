@@ -1302,6 +1302,47 @@
       return result || {};
     }
 
+    async function checkPhoneResendPageError(tabId) {
+      try {
+        const result = await sendToContentScriptResilient('signup-page', {
+          type: 'CHECK_PHONE_RESEND_ERROR',
+          source: 'background',
+          payload: {},
+        }, {
+          timeoutMs: 3000,
+          responseTimeoutMs: 3000,
+          retryDelayMs: 500,
+        });
+
+        if (result?.error) {
+          throw new Error(result.error);
+        }
+        return result || {};
+      } catch (error) {
+        if (isPhoneResendBannedNumberError(error)) {
+          return {
+            hasError: true,
+            reason: 'resend_phone_banned',
+            message: error.message,
+          };
+        }
+        if (isPhoneResendThrottledError(error)) {
+          return {
+            hasError: true,
+            reason: 'resend_throttled',
+            message: error.message,
+          };
+        }
+        await addLog(`Step 9: ignored transient phone resend error probe failure. ${error.message}`, 'warn');
+        return {
+          hasError: false,
+          reason: '',
+          message: '',
+          probeError: error.message,
+        };
+      }
+    }
+
     async function fillPhoneNumberOnly(tabId, activation) {
       const normalizedActivation = normalizeFreeReusablePhoneActivation(activation);
       if (!normalizedActivation) {
@@ -1532,6 +1573,16 @@
             intervalMs: pollIntervalSeconds * 1000,
             maxRounds: pollMaxRounds,
             onStatus: async ({ elapsedMs, pollCount, statusText }) => {
+              if (/^STATUS_(WAIT_CODE|WAIT_RETRY|WAIT_RESEND)$/i.test(String(statusText || ''))) {
+                const pageError = await checkPhoneResendPageError(tabId);
+                if (pageError?.reason === 'resend_phone_banned') {
+                  throw new Error(`${PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX}${pageError.message || 'OpenAI could not send SMS to this phone number.'}`);
+                }
+                if (pageError?.reason === 'resend_throttled') {
+                  throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${pageError.message || 'OpenAI resend is throttled.'}`);
+                }
+              }
+
               const shouldLog = (
                 pollCount === 1
                 || statusText !== lastLoggedStatus
@@ -1553,6 +1604,28 @@
             replaceNumber: false,
           };
         } catch (error) {
+          if (isPhoneResendBannedNumberError(error)) {
+            await addLog(
+              `Step 9: OpenAI could not send SMS to ${normalizedActivation.phoneNumber} during SMS wait; replacing this number immediately. ${error.message}`,
+              'warn'
+            );
+            return {
+              code: '',
+              replaceNumber: true,
+              reason: 'resend_phone_banned',
+            };
+          }
+          if (isPhoneResendThrottledError(error)) {
+            await addLog(
+              `Step 9: resend is throttled for ${normalizedActivation.phoneNumber} during SMS wait, replacing number immediately. ${error.message}`,
+              'warn'
+            );
+            return {
+              code: '',
+              replaceNumber: true,
+              reason: 'resend_throttled',
+            };
+          }
           if (!isPhoneCodeTimeoutError(error)) {
             throw error;
           }

@@ -10122,7 +10122,7 @@ let step8TabUpdatedListener = null;
 let step8PendingReject = null;
 const STEP8_CLICK_EFFECT_TIMEOUT_MS = 15000;
 const STEP8_CLICK_RETRY_DELAY_MS = 500;
-const STEP8_READY_WAIT_TIMEOUT_MS = 180000;
+const STEP8_READY_WAIT_TIMEOUT_MS = 240000;
 const STEP8_MAX_ROUNDS = 5;
 const STEP8_STRATEGIES = [
   { mode: 'content', strategy: 'requestSubmit', label: 'form.requestSubmit' },
@@ -10218,10 +10218,36 @@ async function getStep8PageState(tabId, responseTimeoutMs = 1500) {
 }
 
 async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS) {
-  const start = Date.now();
+  const normalizedTimeoutMs = Math.max(1000, Number(timeoutMs) || STEP8_READY_WAIT_TIMEOUT_MS);
+  let waitStartedAt = Date.now();
   let recovered = false;
+  let phoneVerificationRecovered = false;
+  let lastConsentPendingLogAt = 0;
+  let lastConsentPendingSignature = '';
 
-  while (Date.now() - start < timeoutMs) {
+  const isConsentLikeUrl = (url) => /\/sign-in-with-chatgpt\/[^/?#]+\/consent(?:[/?#]|$)/i.test(String(url || ''));
+  const describeConsentPendingState = (pageState) => {
+    const url = pageState?.url || 'unknown';
+    const buttonText = pageState?.buttonText ? `, buttonText="${pageState.buttonText}"` : '';
+    return `URL: ${url}; consentPage=${Boolean(pageState?.consentPage)}; buttonFound=${Boolean(pageState?.buttonFound)}; buttonEnabled=${Boolean(pageState?.buttonEnabled)}${buttonText}`;
+  };
+  const maybeLogConsentPendingState = async (pageState) => {
+    if (!pageState || !(pageState.consentPage || isConsentLikeUrl(pageState.url))) {
+      return;
+    }
+    const signature = describeConsentPendingState(pageState);
+    const now = Date.now();
+    if (signature === lastConsentPendingSignature && now - lastConsentPendingLogAt < 5000) {
+      return;
+    }
+    lastConsentPendingSignature = signature;
+    lastConsentPendingLogAt = now;
+    if (typeof addLog === 'function') {
+      await addLog(`步骤 9：已进入 OAuth 同意页但“继续”按钮尚未就绪，继续等待。${signature}`, 'info');
+    }
+  };
+
+  while (Date.now() - waitStartedAt < normalizedTimeoutMs) {
     throwIfStopped();
     const pageState = await getStep8PageState(tabId);
     if (pageState?.maxCheckAttemptsBlocked) {
@@ -10237,7 +10263,14 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
             : `步骤 9：当前认证页进入手机号页面，但未开启接码功能，无法继续自动授权。${urlPart}`.trim()
         );
       }
-      await phoneVerificationHelpers.completePhoneVerificationFlow(tabId, pageState);
+      const phoneResult = await phoneVerificationHelpers.completePhoneVerificationFlow(tabId, pageState);
+      if (phoneResult?.consentReady) {
+        return phoneResult;
+      }
+      waitStartedAt = Date.now();
+      phoneVerificationRecovered = true;
+      lastConsentPendingLogAt = 0;
+      lastConsentPendingSignature = '';
       recovered = false;
       await sleepWithStop(250);
       continue;
@@ -10259,10 +10292,11 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
     if (pageState?.consentReady) {
       return pageState;
     }
+    await maybeLogConsentPendingState(pageState);
     if (pageState === null && !recovered) {
       recovered = true;
       await ensureStep8SignupPageReady(tabId, {
-        timeoutMs: Math.min(10000, timeoutMs),
+        timeoutMs: Math.min(10000, normalizedTimeoutMs),
         logMessage: '步骤 9：认证页内容脚本已失联，正在等待页面重新就绪...',
       });
       continue;
@@ -10271,7 +10305,11 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
     await sleepWithStop(250);
   }
 
-  throw new Error('步骤 9：长时间未进入 OAuth 同意页，无法定位“继续”按钮。');
+  throw new Error(
+    phoneVerificationRecovered
+      ? '步骤 9：手机验证已完成，但长时间等待后 OAuth 同意页“继续”按钮仍未就绪。'
+      : '步骤 9：长时间未进入 OAuth 同意页，无法定位“继续”按钮。'
+  );
 }
 
 async function prepareStep8DebuggerClick(tabId, options = {}) {

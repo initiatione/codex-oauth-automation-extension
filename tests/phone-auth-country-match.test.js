@@ -278,6 +278,46 @@ test('phone auth reports banned-number error after resend click', async () => {
   }
 });
 
+test('phone auth read-only resend probe reports banned-number text', async () => {
+  const originalDocument = global.document;
+  const originalLocation = global.location;
+  const dom = createFakePhoneVerificationDom();
+
+  global.document = dom.document;
+  global.location = { href: 'https://auth.openai.com/phone-verification' };
+
+  try {
+    const helpers = api.createPhoneAuthHelpers({
+      fillInput: () => {},
+      getActionText: (element) => element?.textContent || '',
+      getPageTextSnapshot: () => '无法向此电话号码发送短信',
+      getVerificationErrorText: () => '',
+      humanPause: async () => {},
+      isActionEnabled: () => true,
+      isAddPhonePageReady: () => false,
+      isConsentReady: () => false,
+      isPhoneVerificationPageReady: () => true,
+      isVisibleElement: () => true,
+      simulateClick: () => {},
+      sleep: async () => {},
+      throwIfStopped: () => {},
+      waitForElement: async () => null,
+    });
+
+    assert.deepStrictEqual(helpers.checkPhoneResendError(), {
+      hasError: true,
+      reason: 'resend_phone_banned',
+      prefix: 'PHONE_RESEND_BANNED_NUMBER::',
+      message: '无法向此电话号码发送短信',
+      url: 'https://auth.openai.com/phone-verification',
+    });
+    assert.equal(dom.wasResendClicked(), false);
+  } finally {
+    global.document = originalDocument;
+    global.location = originalLocation;
+  }
+});
+
 test('phone auth still reports normal resend success when no resend error appears', async () => {
   const originalDocument = global.document;
   const originalLocation = global.location;
@@ -351,6 +391,44 @@ test('phone auth still reports resend throttling separately from banned number',
       () => helpers.resendPhoneVerificationCode(1000),
       /PHONE_RESEND_THROTTLED::Tried to resend too many times/
     );
+  } finally {
+    global.document = originalDocument;
+    global.location = originalLocation;
+  }
+});
+
+test('phone auth read-only resend probe reports throttled text', async () => {
+  const originalDocument = global.document;
+  const originalLocation = global.location;
+  const dom = createFakePhoneVerificationDom();
+
+  global.document = dom.document;
+  global.location = { href: 'https://auth.openai.com/phone-verification' };
+
+  try {
+    const helpers = api.createPhoneAuthHelpers({
+      fillInput: () => {},
+      getActionText: (element) => element?.textContent || '',
+      getPageTextSnapshot: () => 'Tried to resend too many times. Please try again later.',
+      getVerificationErrorText: () => '',
+      humanPause: async () => {},
+      isActionEnabled: () => true,
+      isAddPhonePageReady: () => false,
+      isConsentReady: () => false,
+      isPhoneVerificationPageReady: () => true,
+      isVisibleElement: () => true,
+      simulateClick: () => {},
+      sleep: async () => {},
+      throwIfStopped: () => {},
+      waitForElement: async () => null,
+    });
+
+    const result = helpers.checkPhoneResendError();
+    assert.equal(result.hasError, true);
+    assert.equal(result.reason, 'resend_throttled');
+    assert.equal(result.prefix, 'PHONE_RESEND_THROTTLED::');
+    assert.match(result.message, /Tried to resend too many times/i);
+    assert.equal(dom.wasResendClicked(), false);
   } finally {
     global.document = originalDocument;
     global.location = originalLocation;

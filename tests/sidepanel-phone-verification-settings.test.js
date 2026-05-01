@@ -91,6 +91,20 @@ test('sidepanel html exposes phone verification toggle and dedicated HeroSMS row
   assert.doesNotMatch(html, /id="input-account-run-history-text-enabled"/);
 });
 
+test('free reusable phone clear button uses chrome runtime messaging directly', () => {
+  const marker = "btnClearFreeReusablePhone?.addEventListener('click', async () => {";
+  const start = sidepanelSource.indexOf(marker);
+  assert.notEqual(start, -1);
+  const end = sidepanelSource.indexOf('selectHeroSmsAcquirePriority?.addEventListener', start);
+  assert.notEqual(end, -1);
+  const block = sidepanelSource.slice(start, end);
+
+  assert.match(block, /chrome\.runtime\.sendMessage\(\{\s*type:\s*'CLEAR_FREE_REUSABLE_PHONE'/s);
+  assert.match(block, /chrome\.runtime\.sendMessage\(\{\s*type:\s*'GET_STATE'/s);
+  assert.match(block, /renderState\(latestState \|\| \{\}\)/);
+  assert.doesNotMatch(block, /await sendMessage\(/);
+});
+
 test('updatePhoneVerificationSettingsUI toggles HeroSMS rows from the sms switch', () => {
   const api = new Function(`
 const phoneVerificationSectionExpanded = true;

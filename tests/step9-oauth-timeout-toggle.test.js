@@ -76,6 +76,7 @@ async function recoverOAuthLocalhostTimeout() {
   throw new Error('should not recover when timeout has been disabled');
 }
 async function waitForStep8Ready() {
+  waitForStep8Ready.calls = (waitForStep8Ready.calls || 0) + 1;
   return {
     consentReady: true,
     url: 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent',
@@ -160,6 +161,7 @@ return {
       recoveryCalls,
       completePayload,
       hasPendingReject: Boolean(step8PendingReject),
+      waitForStep8ReadyCalls: waitForStep8Ready.calls || 0,
     };
   },
 };
@@ -173,6 +175,7 @@ return {
   const snapshot = api.snapshot();
   assert.equal(snapshot.recoveryCalls, 0);
   assert.equal(snapshot.remainingCalls >= 1, true);
+  assert.equal(snapshot.waitForStep8ReadyCalls, 1);
   assert.equal(snapshot.cleanupCalls >= 1, true);
   assert.equal(snapshot.hasPendingReject, false);
   assert.deepEqual(snapshot.completePayload, {

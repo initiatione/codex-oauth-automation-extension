@@ -6745,8 +6745,8 @@ async function startAutoRunFromCurrentSettings() {
   const delayMinutes = normalizeAutoDelayMinutes(inputAutoDelayMinutes.value);
   inputAutoDelayMinutes.value = String(delayMinutes);
   btnAutoRun.innerHTML = delayEnabled
-    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> 璁″垝涓?..'
-    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> 杩愯涓?..';
+    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> 计划中...'
+    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> 运行中...';
   const response = await chrome.runtime.sendMessage({
     type: delayEnabled ? 'SCHEDULE_AUTO_RUN' : 'AUTO_RUN',
     source: 'sidepanel',
@@ -7873,7 +7873,9 @@ inputFreePhoneReuseEnabled?.addEventListener('change', () => {
 
 btnClearFreeReusablePhone?.addEventListener('click', async () => {
   try {
-    await sendMessage({ type: 'CLEAR_FREE_REUSABLE_PHONE', source: 'sidepanel' });
+    await chrome.runtime.sendMessage({ type: 'CLEAR_FREE_REUSABLE_PHONE', source: 'sidepanel' });
+    const latestState = await chrome.runtime.sendMessage({ type: 'GET_STATE', source: 'sidepanel' });
+    renderState(latestState || {});
     showToast('已清除白嫖复用手机号', 'ok');
   } catch (error) {
     showToast(`清除失败：${error?.message || error}`, 'error');

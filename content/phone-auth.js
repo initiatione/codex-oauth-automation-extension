@@ -416,6 +416,37 @@
       return '';
     }
 
+    function checkPhoneResendError() {
+      const bannedNumberText = getPhoneResendBannedNumberText();
+      if (bannedNumberText) {
+        return {
+          hasError: true,
+          reason: 'resend_phone_banned',
+          prefix: PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX,
+          message: bannedNumberText,
+          url: location.href,
+        };
+      }
+
+      const throttledText = getPhoneResendThrottleText();
+      if (throttledText) {
+        return {
+          hasError: true,
+          reason: 'resend_throttled',
+          prefix: PHONE_RESEND_THROTTLED_ERROR_PREFIX,
+          message: throttledText,
+          url: location.href,
+        };
+      }
+
+      return {
+        hasError: false,
+        reason: '',
+        message: '',
+        url: location.href,
+      };
+    }
+
     async function waitForAddPhoneReady(timeout = 20000) {
       const start = Date.now();
       while (Date.now() - start < timeout) {
@@ -703,6 +734,7 @@
 
     return {
       getPhoneVerificationDisplayedPhone,
+      checkPhoneResendError,
       fillPhoneNumberOnly,
       isPhoneVerificationPageReady,
       resendPhoneVerificationCode,

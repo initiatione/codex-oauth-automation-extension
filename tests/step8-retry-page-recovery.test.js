@@ -305,12 +305,153 @@ return {
       },
     },
   ]);
-  assert.deepStrictEqual(result, {
-    url: 'https://auth.openai.com/authorize',
+  assert.equal(result?.success, true);
+  assert.equal(result?.consentReady, true);
+  assert.equal(result?.url, 'https://auth.openai.com/authorize');
+});
+
+test('step 8 ready check resets consent wait after slow phone verification recovery', async () => {
+  const api = new Function(`
+let pollCount = 0;
+let now = 0;
+const phoneVerificationCalls = [];
+const realDateNow = Date.now;
+
+function throwIfStopped() {}
+async function sleepWithStop() {}
+async function ensureStep8SignupPageReady() {}
+async function getState() {
+  return { phoneVerificationEnabled: true };
+}
+const phoneVerificationHelpers = {
+  async completePhoneVerificationFlow(tabId, pageState) {
+    phoneVerificationCalls.push({ tabId, pageState });
+    now = 2000;
+    return {
+      success: true,
+      consentReady: false,
+      url: 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent',
+    };
+  },
+};
+async function getStep8PageState() {
+  pollCount += 1;
+  if (pollCount === 1) {
+    return {
+      url: 'https://auth.openai.com/add-phone',
+      addPhonePage: true,
+      phoneVerificationPage: false,
+      consentReady: false,
+    };
+  }
+  return {
+    url: 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent',
     addPhonePage: false,
     phoneVerificationPage: false,
+    consentPage: true,
     consentReady: true,
-  });
+    buttonFound: true,
+    buttonEnabled: true,
+    buttonText: 'Continue',
+  };
+}
+
+${extractFunction('waitForStep8Ready')}
+
+return {
+  async run() {
+    Date.now = () => now;
+    try {
+      return {
+        result: await waitForStep8Ready(88, 1000),
+        phoneVerificationCalls,
+        pollCount,
+      };
+    } finally {
+      Date.now = realDateNow;
+    }
+  },
+};
+`)();
+
+  const { result, phoneVerificationCalls, pollCount } = await api.run();
+
+  assert.equal(phoneVerificationCalls.length, 1);
+  assert.equal(pollCount, 2);
+  assert.equal(result?.consentReady, true);
+  assert.equal(result?.url, 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent');
+});
+
+test('step 8 ready check waits on consent URL until continue button becomes ready', async () => {
+  const api = new Function(`
+let pollCount = 0;
+const logs = [];
+
+function throwIfStopped() {}
+async function sleepWithStop() {}
+async function ensureStep8SignupPageReady() {}
+async function addLog(message, level) {
+  logs.push({ message, level });
+}
+async function getState() {
+  return { phoneVerificationEnabled: true };
+}
+const phoneVerificationHelpers = {
+  async completePhoneVerificationFlow() {
+    throw new Error('should not trigger phone verification flow');
+  },
+};
+async function getStep8PageState() {
+  pollCount += 1;
+  if (pollCount === 1) {
+    return {
+      url: 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent',
+      addPhonePage: false,
+      phoneVerificationPage: false,
+      consentPage: true,
+      consentReady: false,
+      buttonFound: false,
+      buttonEnabled: false,
+      buttonText: '',
+    };
+  }
+  return {
+    url: 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent',
+    addPhonePage: false,
+    phoneVerificationPage: false,
+    consentPage: true,
+    consentReady: true,
+    buttonFound: true,
+    buttonEnabled: true,
+    buttonText: 'Continue',
+  };
+}
+
+${extractFunction('waitForStep8Ready')}
+
+return {
+  async run() {
+    return {
+      result: await waitForStep8Ready(88, 1000),
+      logs,
+      pollCount,
+    };
+  },
+};
+`)();
+
+  const { result, logs, pollCount } = await api.run();
+
+  assert.equal(pollCount, 2);
+  assert.equal(result?.consentReady, true);
+  assert.ok(
+    logs.some(({ message }) => (
+      /继续.*尚未就绪/.test(message)
+      && /buttonFound=false/.test(message)
+      && /buttonEnabled=false/.test(message)
+    )),
+    'expected consent pending diagnostics to include button state'
+  );
 });
 
 test('step 8 ready check blocks phone verification flow when sms toggle is disabled', async () => {
