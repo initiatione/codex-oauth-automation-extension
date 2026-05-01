@@ -829,6 +829,88 @@ test('phone verification helper falls back to plain getNumber when priced reques
   assert.equal(requests[2].searchParams.get('fixedPrice'), null);
 });
 
+test('phone verification helper surfaces HeroSMS network failures with request context', async () => {
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getPrices') {
+        return {
+          ok: true,
+          text: async () => buildHeroSmsPricesPayload(),
+        };
+      }
+      const error = new TypeError('Failed to fetch');
+      error.cause = { code: 'ECONNRESET' };
+      throw error;
+    },
+    getState: async () => ({ heroSmsApiKey: 'demo-key' }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    helpers.requestPhoneActivation({
+      heroSmsApiKey: 'demo-key',
+      heroSmsActivationRetryRounds: 1,
+    }),
+    /HeroSMS getNumberV2 network request failed.*action=getNumberV2.*country=52.*base=https:\/\/hero-sms\.com\/stubs\/handler_api\.php.*ECONNRESET/i
+  );
+});
+
+test('phone verification helper logs HeroSMS number-acquire network failures per country', async () => {
+  const logs = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async (message, level) => {
+      logs.push({ message, level });
+    },
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getPrices') {
+        return {
+          ok: true,
+          text: async () => buildHeroSmsPricesPayload(),
+        };
+      }
+      if (action === 'getNumber') {
+        throw new TypeError('Failed to fetch');
+      }
+      return {
+        ok: true,
+        text: async () => 'NO_NUMBERS',
+      };
+    },
+    getState: async () => ({ heroSmsApiKey: 'demo-key' }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    helpers.requestPhoneActivation({
+      heroSmsApiKey: 'demo-key',
+      heroSmsActivationRetryRounds: 1,
+    }),
+    /HeroSMS no numbers available/i
+  );
+
+  assert.equal(
+    logs.some(({ message, level }) => (
+      level === 'warn'
+      && /HeroSMS getNumber network failure for Thailand/.test(message)
+      && /network request failed/.test(message)
+    )),
+    true
+  );
+});
+
 test('phone verification helper completes add-phone flow, clears current activation, and stores reusable number state', async () => {
   const requests = [];
   const stateUpdates = [];

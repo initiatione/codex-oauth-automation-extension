@@ -419,6 +419,85 @@ test('verification flow completes step 8 and flags phone verification when add-p
   ]);
 });
 
+test('verification flow submits an iCloud fast-path step 8 code without requesting resend', async () => {
+  const events = [];
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async (_step, payload) => {
+      events.push(['complete', payload.code]);
+    },
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async (_source, message) => {
+      events.push([message.type, message.payload?.code || '']);
+      if (message.type === 'RESEND_VERIFICATION_CODE') {
+        throw new Error('should not request resend after iCloud fast-path code');
+      }
+      return {};
+    },
+    sendToMailContentScriptResilient: async (mail, message) => {
+      events.push(['mail', mail.source, message.type]);
+      assert.equal(mail.source, 'icloud-mail');
+      assert.equal(message.type, 'POLL_EMAIL');
+      return {
+        code: '654321',
+        emailTimestamp: 123,
+      };
+    },
+    setState: async (payload) => {
+      events.push(['state', payload.lastLoginCode || payload.lastSignupCode]);
+    },
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  await helpers.resolveVerificationStep(
+    8,
+    {
+      email: 'user@example.com',
+      lastLoginCode: null,
+    },
+    {
+      provider: 'icloud',
+      source: 'icloud-mail',
+      label: 'iCloud 邮箱',
+    },
+    {
+      filterAfterTimestamp: 123456,
+      requestFreshCodeFirst: false,
+      maxResendRequests: 1,
+      resendIntervalMs: 25000,
+    }
+  );
+
+  assert.deepStrictEqual(events, [
+    ['mail', 'icloud-mail', 'POLL_EMAIL'],
+    ['FILL_CODE', '654321'],
+    ['state', '654321'],
+    ['complete', '654321'],
+  ]);
+});
+
 test('verification flow keeps step 8 successful when code submit transport fails but auth page already reaches oauth consent', async () => {
   const events = [];
 

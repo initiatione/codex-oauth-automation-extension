@@ -510,6 +510,44 @@
       return url.toString();
     }
 
+    function summarizeHeroSmsRequest(config = {}, query = {}) {
+      const parts = [];
+      const baseUrl = String(config.baseUrl || '').trim();
+      if (query.action) parts.push(`action=${query.action}`);
+      if (query.country) parts.push(`country=${query.country}`);
+      if (query.service) parts.push(`service=${query.service}`);
+      if (query.maxPrice !== undefined && query.maxPrice !== null && query.maxPrice !== '') {
+        parts.push(`maxPrice=${query.maxPrice}`);
+      }
+      if (query.fixedPrice) parts.push(`fixedPrice=${query.fixedPrice}`);
+      if (baseUrl) {
+        try {
+          const parsed = new URL(normalizeUrl(baseUrl));
+          parts.push(`base=${parsed.origin}${parsed.pathname}`);
+        } catch {
+          parts.push(`base=${baseUrl}`);
+        }
+      }
+      return parts.join(', ');
+    }
+
+    function buildHeroSmsNetworkError(error, config = {}, query = {}, actionLabel = 'HeroSMS request') {
+      const rawMessage = String(error?.message || error || '').trim() || 'network request failed';
+      const cause = error?.cause;
+      const causeText = cause
+        ? String(cause.code || cause.message || cause).trim()
+        : '';
+      const summary = summarizeHeroSmsRequest(config, query);
+      const requestPart = summary ? ` (${summary})` : '';
+      const causePart = causeText ? ` Cause: ${causeText}.` : '';
+      const nextError = new Error(
+        `${actionLabel} network request failed${requestPart}: ${rawMessage}.${causePart} Check network/proxy access to HeroSMS.`
+      );
+      nextError.cause = error;
+      nextError.requestSummary = summary;
+      return nextError;
+    }
+
     function buildPhoneCodeTimeoutError(lastResponse = '') {
       const suffix = lastResponse ? ` Last HeroSMS status: ${lastResponse}` : '';
       return new Error(`${PHONE_CODE_TIMEOUT_ERROR_PREFIX}Timed out waiting for the phone verification code.${suffix}`);
@@ -649,6 +687,9 @@
       } catch (error) {
         if (error?.name === 'AbortError') {
           throw new Error(`${actionLabel} timed out.`);
+        }
+        if (isNetworkFetchFailure(error)) {
+          throw buildHeroSmsNetworkError(error, config, query, actionLabel);
         }
         throw error;
       } finally {
@@ -807,8 +848,9 @@
     }
 
     function isNetworkFetchFailure(error) {
-      const message = String(error?.message || '').trim();
-      return /failed to fetch|networkerror|load failed/i.test(message);
+      const message = String(error?.message || error || '').trim();
+      const cause = String(error?.cause?.code || error?.cause?.message || '').trim();
+      return /failed to fetch|fetch failed|networkerror|network request failed|load failed|econnreset|und_err_socket|socket/i.test(`${message} ${cause}`);
     }
 
     function isHeroSmsTerminalError(payloadOrMessage) {
@@ -1102,6 +1144,13 @@
                   noNumbersObservedInCountry = true;
                   lastFailureText = describeHeroSmsPayload(payloadOrMessage) || lastFailureText;
                   continue;
+                }
+                if (isNetworkFetchFailure(payloadOrMessage)) {
+                  const networkText = describeHeroSmsPayload(payloadOrMessage) || String(error?.message || error || '');
+                  await addLog(
+                    `Step 9: HeroSMS ${requestAction} network failure for ${countryConfig.label} (country ${countryConfig.id}${maxPrice !== null && maxPrice !== undefined ? `, maxPrice=${maxPrice}` : ''}): ${networkText}`,
+                    'warn'
+                  );
                 }
                 lastFailureText = describeHeroSmsPayload(payloadOrMessage) || lastFailureText;
                 lastError = error;

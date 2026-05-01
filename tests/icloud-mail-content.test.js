@@ -193,3 +193,239 @@ return {
   assert.equal(api.isThreadItemSelected(staleItem, api.buildItemSignature(selectedItem)), true);
   assert.equal(api.isThreadItemSelected(staleItem, api.buildItemSignature(staleItem)), false);
 });
+
+test('parseIcloudTimestamp handles recent iCloud timestamp labels', () => {
+  const bundle = [
+    extractFunction('normalizeText'),
+    extractFunction('parseIcloudMeridiemHour'),
+    extractFunction('parseIcloudTimestamp'),
+  ].join('\n');
+
+  const api = new Function(`
+${bundle}
+return { parseIcloudTimestamp };
+`)();
+
+  const now = new Date(2026, 4, 1, 23, 35, 30).getTime();
+  assert.equal(api.parseIcloudTimestamp('刚刚', now), now);
+  assert.equal(api.parseIcloudTimestamp('1 分钟前', now), now - 60_000);
+  assert.equal(api.parseIcloudTimestamp('1 min ago', now), now - 60_000);
+  assert.equal(api.parseIcloudTimestamp('下午11:34', now), new Date(2026, 4, 1, 23, 34).getTime());
+  assert.equal(api.parseIcloudTimestamp('上午12:05', now), new Date(2026, 4, 1, 0, 5).getTime());
+  assert.equal(api.parseIcloudTimestamp('2026/05/01 下午11:34', now), new Date(2026, 4, 1, 23, 34).getTime());
+});
+
+test('iCloud first pass refreshes before old-mail snapshot and accepts a near-time matching mail', async () => {
+  const bundle = [
+    extractFunction('normalizeText'),
+    extractFunction('parseIcloudMeridiemHour'),
+    extractFunction('parseIcloudTimestamp'),
+    extractFunction('isNearVerificationRequestTime'),
+    extractFunction('buildVerificationMailFilters'),
+    extractFunction('doesThreadMetadataMatchFilters'),
+    extractFunction('doesOpenedMailMatchFilters'),
+    extractFunction('findNewestMatchingThreadItem'),
+    extractFunction('getThreadItemMetadata'),
+    extractFunction('extractVerificationCode'),
+    extractFunction('tryReadNearTimeFirstPass'),
+  ].join('\n');
+
+  const api = new Function(`
+let refreshed = false;
+let snapshotCount = 0;
+const item = {
+  getAttribute() {
+    return '';
+  },
+  querySelector(selector) {
+    const map = {
+      '.thread-participants': { textContent: 'OpenAI' },
+      '.thread-subject': { textContent: 'ChatGPT Log-in Code' },
+      '.thread-preview': { textContent: 'Enter this code: 731091' },
+      '.thread-timestamp': { textContent: '1分钟前' },
+    };
+    return map[selector] || null;
+  },
+};
+function collectThreadItems() {
+  if (!refreshed) return [];
+  return [item];
+}
+async function refreshInbox() {
+  refreshed = true;
+}
+function buildItemSignature() {
+  snapshotCount += 1;
+  return 'snapshot';
+}
+function log() {}
+${bundle}
+return {
+  buildVerificationMailFilters,
+  tryReadNearTimeFirstPass,
+  get snapshotCount() {
+    return snapshotCount;
+  },
+};
+`)();
+
+  const now = Date.now();
+  const result = await api.tryReadNearTimeFirstPass(
+    8,
+    {
+      filterAfterTimestamp: now - 90_000,
+      senderFilters: ['openai'],
+      subjectFilters: ['login', 'code'],
+    },
+    api.buildVerificationMailFilters({
+      senderFilters: ['openai'],
+      subjectFilters: ['login', 'code'],
+    }),
+    new Set()
+  );
+
+  assert.equal(result.code, '731091');
+  assert.equal(api.snapshotCount, 0);
+});
+
+test('iCloud first pass rejects stale, unparseable, and excluded matching mails', async () => {
+  const bundle = [
+    extractFunction('normalizeText'),
+    extractFunction('parseIcloudMeridiemHour'),
+    extractFunction('parseIcloudTimestamp'),
+    extractFunction('isNearVerificationRequestTime'),
+    extractFunction('buildVerificationMailFilters'),
+    extractFunction('doesThreadMetadataMatchFilters'),
+    extractFunction('doesOpenedMailMatchFilters'),
+    extractFunction('findNewestMatchingThreadItem'),
+    extractFunction('getThreadItemMetadata'),
+    extractFunction('extractVerificationCode'),
+    extractFunction('tryReadNearTimeFirstPass'),
+  ].join('\n');
+
+  const api = new Function(`
+let currentTimestamp = '1小时前';
+let currentCode = '731091';
+const item = {
+  getAttribute() {
+    return '';
+  },
+  querySelector(selector) {
+    const map = {
+      '.thread-participants': { textContent: 'OpenAI' },
+      '.thread-subject': { textContent: 'ChatGPT Log-in Code' },
+      '.thread-preview': { textContent: 'Enter this code: ' + currentCode },
+      '.thread-timestamp': { textContent: currentTimestamp },
+    };
+    return map[selector] || null;
+  },
+};
+function collectThreadItems() {
+  return [item];
+}
+async function refreshInbox() {}
+async function openMailItemAndRead() {
+  return {
+    sender: 'OpenAI',
+    timestamp: '昨天',
+    bodyText: 'ChatGPT Log-in Code Enter this code: ' + currentCode,
+    combinedText: 'OpenAI 昨天 ChatGPT Log-in Code Enter this code: ' + currentCode,
+  };
+}
+function log() {}
+${bundle}
+return {
+  buildVerificationMailFilters,
+  tryReadNearTimeFirstPass,
+  setCase(timestamp, code) {
+    currentTimestamp = timestamp;
+    currentCode = code;
+  },
+};
+`)();
+  const filters = api.buildVerificationMailFilters({
+    senderFilters: ['openai'],
+    subjectFilters: ['login', 'code'],
+  });
+  const basePayload = {
+    filterAfterTimestamp: Date.now() - 60_000,
+    senderFilters: ['openai'],
+    subjectFilters: ['login', 'code'],
+  };
+
+  assert.equal(await api.tryReadNearTimeFirstPass(8, basePayload, filters, new Set()), null);
+
+  api.setCase('昨天', '731091');
+  assert.equal(await api.tryReadNearTimeFirstPass(8, basePayload, filters, new Set()), null);
+
+  api.setCase('刚刚', '731091');
+  assert.equal(await api.tryReadNearTimeFirstPass(8, basePayload, filters, new Set(['731091'])), null);
+});
+
+test('iCloud first pass can confirm an unparseable list timestamp from the opened header', async () => {
+  const bundle = [
+    extractFunction('normalizeText'),
+    extractFunction('parseIcloudMeridiemHour'),
+    extractFunction('parseIcloudTimestamp'),
+    extractFunction('isNearVerificationRequestTime'),
+    extractFunction('buildVerificationMailFilters'),
+    extractFunction('doesThreadMetadataMatchFilters'),
+    extractFunction('doesOpenedMailMatchFilters'),
+    extractFunction('findNewestMatchingThreadItem'),
+    extractFunction('getThreadItemMetadata'),
+    extractFunction('extractVerificationCode'),
+    extractFunction('tryReadNearTimeFirstPass'),
+  ].join('\n');
+
+  const api = new Function(`
+const item = {
+  getAttribute() {
+    return '';
+  },
+  querySelector(selector) {
+    const map = {
+      '.thread-participants': { textContent: 'OpenAI' },
+      '.thread-subject': { textContent: 'ChatGPT Log-in Code' },
+      '.thread-preview': { textContent: 'Open this email for the code' },
+      '.thread-timestamp': { textContent: '今天' },
+    };
+    return map[selector] || null;
+  },
+};
+function collectThreadItems() {
+  return [item];
+}
+async function refreshInbox() {}
+async function openMailItemAndRead() {
+  return {
+    sender: 'OpenAI',
+    timestamp: '刚刚',
+    bodyText: 'ChatGPT Log-in Code Enter this code: 982219',
+    combinedText: 'OpenAI 刚刚 ChatGPT Log-in Code Enter this code: 982219',
+  };
+}
+function log() {}
+${bundle}
+return {
+  buildVerificationMailFilters,
+  tryReadNearTimeFirstPass,
+};
+`)();
+
+  const filters = api.buildVerificationMailFilters({
+    senderFilters: ['openai'],
+    subjectFilters: ['login', 'code'],
+  });
+  const result = await api.tryReadNearTimeFirstPass(
+    8,
+    {
+      filterAfterTimestamp: Date.now() - 60_000,
+      senderFilters: ['openai'],
+      subjectFilters: ['login', 'code'],
+    },
+    filters,
+    new Set()
+  );
+
+  assert.equal(result.code, '982219');
+});

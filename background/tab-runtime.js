@@ -18,6 +18,7 @@
     } = deps;
 
     const pendingCommands = new Map();
+    const ICLOUD_POLL_EMAIL_RECOVERY_RESPONSE_TIMEOUT_MS = 10000;
 
     async function sleepOrStop(ms) {
       if (typeof sleepWithStop === 'function') {
@@ -422,15 +423,31 @@
       return 30000;
     }
 
-    function resolveResponseTimeoutMs(message, requestedResponseTimeoutMs, remainingTimeoutMs = null) {
+    function resolveResponseTimeoutMs(message, requestedResponseTimeoutMs, remainingTimeoutMs = null, options = {}) {
       const fallbackTimeoutMs = getContentScriptResponseTimeoutMs(message);
       const requestedTimeoutMs = Number.isFinite(Number(requestedResponseTimeoutMs))
         ? Math.max(1, Math.floor(Number(requestedResponseTimeoutMs)))
         : fallbackTimeoutMs;
+      const minimumTimeoutMs = Math.max(1, Math.floor(Number(options.minimumTimeoutMs) || 1));
       if (!Number.isFinite(Number(remainingTimeoutMs))) {
-        return requestedTimeoutMs;
+        return Math.max(requestedTimeoutMs, minimumTimeoutMs);
       }
-      return Math.max(1, Math.min(requestedTimeoutMs, Math.floor(Number(remainingTimeoutMs))));
+      const cappedTimeoutMs = Math.max(1, Math.min(requestedTimeoutMs, Math.floor(Number(remainingTimeoutMs))));
+      if (Math.floor(Number(remainingTimeoutMs)) >= minimumTimeoutMs) {
+        return Math.max(cappedTimeoutMs, minimumTimeoutMs);
+      }
+      return cappedTimeoutMs;
+    }
+
+    function getMailResponseTimeoutFloorMs(mail, message, recoveries = 0) {
+      if (
+        recoveries > 0
+        && mail?.source === 'icloud-mail'
+        && message?.type === 'POLL_EMAIL'
+      ) {
+        return ICLOUD_POLL_EMAIL_RECOVERY_RESPONSE_TIMEOUT_MS;
+      }
+      return 0;
     }
 
     function getMessageDebugLabel(source, message, tabId = null) {
@@ -704,7 +721,10 @@
         const effectiveResponseTimeoutMs = resolveResponseTimeoutMs(
           message,
           responseTimeoutMs,
-          remainingTimeoutMs
+          remainingTimeoutMs,
+          {
+            minimumTimeoutMs: getMailResponseTimeoutFloorMs(mail, message, recoveries),
+          }
         );
 
         try {

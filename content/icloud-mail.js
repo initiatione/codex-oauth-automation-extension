@@ -67,6 +67,168 @@ if (isTopFrame) {
     };
   }
 
+  function parseIcloudMeridiemHour(hour, meridiem = '') {
+    let nextHour = Math.max(0, Math.min(23, Number(hour) || 0));
+    const normalizedMeridiem = normalizeText(meridiem).toLowerCase();
+    if (/下午|晚上|pm|p\.m\./i.test(normalizedMeridiem) && nextHour < 12) {
+      nextHour += 12;
+    }
+    if (/上午|凌晨|am|a\.m\./i.test(normalizedMeridiem) && nextHour === 12) {
+      nextHour = 0;
+    }
+    return nextHour;
+  }
+
+  function parseIcloudTimestamp(value, now = Date.now()) {
+    const text = normalizeText(value);
+    if (!text) return null;
+
+    const lowerText = text.toLowerCase();
+    if (/^(刚刚|just now|moments ago|now)$/i.test(lowerText)) {
+      return now;
+    }
+
+    const relativeMatch = lowerText.match(/(\d+)\s*(秒|second|seconds|sec|secs|分钟|分|min|mins|minute|minutes|小时|hour|hours|hr|hrs|天|日|day|days)\s*(前|ago)?/i);
+    if (relativeMatch) {
+      const amount = Math.max(0, Number(relativeMatch[1]) || 0);
+      const unit = relativeMatch[2];
+      const unitMs = /秒|second|sec/i.test(unit)
+        ? 1000
+        : (/分钟|分|min/i.test(unit)
+          ? 60 * 1000
+          : (/小时|hour|hr/i.test(unit) ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000));
+      return now - amount * unitMs;
+    }
+
+    const calendarMatch = text.match(/(\d{4})[年\/\-.](\d{1,2})[月\/\-.](\d{1,2})(?:日)?(?:\s*(上午|下午|晚上|凌晨|AM|PM|A\.M\.|P\.M\.)?\s*(\d{1,2})[:：](\d{2}))?/i);
+    if (calendarMatch) {
+      const year = Number(calendarMatch[1]);
+      const month = Number(calendarMatch[2]) - 1;
+      const day = Number(calendarMatch[3]);
+      const hour = calendarMatch[5] ? parseIcloudMeridiemHour(calendarMatch[5], calendarMatch[4]) : 0;
+      const minute = calendarMatch[6] ? Number(calendarMatch[6]) : 0;
+      const timestamp = new Date(year, month, day, hour, minute, 0, 0).getTime();
+      return Number.isFinite(timestamp) ? timestamp : null;
+    }
+
+    const parsed = Date.parse(text);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+
+    const timeMatch = text.match(/(上午|下午|晚上|凌晨|AM|PM|A\.M\.|P\.M\.)?\s*(\d{1,2})[:：](\d{2})/i);
+    if (timeMatch) {
+      const base = new Date(now);
+      const hour = parseIcloudMeridiemHour(timeMatch[2], timeMatch[1]);
+      const minute = Number(timeMatch[3]);
+      base.setHours(hour, minute, 0, 0);
+      let timestamp = base.getTime();
+      if (timestamp - now > 2 * 60 * 1000) {
+        timestamp -= 24 * 60 * 60 * 1000;
+      }
+      return Number.isFinite(timestamp) ? timestamp : null;
+    }
+
+    return null;
+  }
+
+  function isNearVerificationRequestTime(timestampMs, filterAfterTimestamp, now = Date.now()) {
+    const parsedTimestamp = Number(timestampMs);
+    const requestTimestamp = Number(filterAfterTimestamp);
+    if (!Number.isFinite(parsedTimestamp) || !Number.isFinite(requestTimestamp) || requestTimestamp <= 0) {
+      return false;
+    }
+    return parsedTimestamp >= requestTimestamp - 60 * 1000
+      && parsedTimestamp <= now + 2 * 60 * 1000;
+  }
+
+  function buildVerificationMailFilters(payload = {}) {
+    const senderFilters = Array.isArray(payload.senderFilters) ? payload.senderFilters : [];
+    const subjectFilters = Array.isArray(payload.subjectFilters) ? payload.subjectFilters : [];
+    return {
+      sender: senderFilters.map((filter) => String(filter || '').toLowerCase()).filter(Boolean),
+      subject: subjectFilters.map((filter) => String(filter || '').toLowerCase()).filter(Boolean),
+    };
+  }
+
+  function doesThreadMetadataMatchFilters(meta, filters) {
+    const lowerSender = meta.sender.toLowerCase();
+    const lowerSubject = normalizeText([meta.subject, meta.preview].join(' ')).toLowerCase();
+    const senderMatch = filters.sender.some((filter) => lowerSender.includes(filter));
+    const subjectMatch = filters.subject.some((filter) => lowerSubject.includes(filter));
+    return { senderMatch, subjectMatch, matched: senderMatch || subjectMatch };
+  }
+
+  function doesOpenedMailMatchFilters(opened, filters, fallbackMatch = {}) {
+    const openedSender = normalizeText(opened?.sender || '').toLowerCase();
+    const openedBody = normalizeText(opened?.bodyText || opened?.combinedText || '').toLowerCase();
+    const openedSenderMatch = filters.sender.some((filter) => openedSender.includes(filter));
+    const openedSubjectMatch = filters.subject.some((filter) => openedBody.includes(filter));
+    return openedSenderMatch || openedSubjectMatch || Boolean(fallbackMatch.senderMatch || fallbackMatch.subjectMatch);
+  }
+
+  function findNewestMatchingThreadItem(filters) {
+    for (const item of collectThreadItems()) {
+      const meta = getThreadItemMetadata(item);
+      const match = doesThreadMetadataMatchFilters(meta, filters);
+      if (match.matched) {
+        return { item, meta, match };
+      }
+    }
+    return null;
+  }
+
+  async function tryReadNearTimeFirstPass(step, payload, filters, excludedCodeSet) {
+    await refreshInbox();
+
+    const candidate = findNewestMatchingThreadItem(filters);
+    if (!candidate) {
+      return null;
+    }
+
+    const { item, meta, match } = candidate;
+    let parsedTimestamp = parseIcloudTimestamp(meta.timestamp);
+    let opened = null;
+
+    if (parsedTimestamp !== null && !isNearVerificationRequestTime(parsedTimestamp, payload.filterAfterTimestamp)) {
+      log(`步骤 ${step}：首封匹配邮件时间不在当前验证码请求窗口内，继续按旧邮件快照逻辑轮询。`, 'info');
+      return null;
+    }
+
+    let code = extractVerificationCode(meta.combinedText);
+
+    if (parsedTimestamp === null || !code) {
+      opened = await openMailItemAndRead(item);
+      if (!doesOpenedMailMatchFilters(opened, filters, match)) {
+        return null;
+      }
+      if (parsedTimestamp === null) {
+        parsedTimestamp = parseIcloudTimestamp(opened.timestamp);
+        if (!isNearVerificationRequestTime(parsedTimestamp, payload.filterAfterTimestamp)) {
+          log(`步骤 ${step}：首封匹配邮件打开后仍无法确认属于当前验证码请求窗口，继续按旧邮件快照逻辑轮询。`, 'info');
+          return null;
+        }
+      }
+      code = extractVerificationCode(opened.combinedText);
+    }
+
+    if (!code) {
+      return null;
+    }
+    if (excludedCodeSet.has(code)) {
+      log(`步骤 ${step}：首轮近时邮件包含排除的验证码：${code}，继续轮询。`, 'info');
+      return null;
+    }
+
+    log(`步骤 ${step}：首轮刷新后已找到近时验证码：${code}`, 'ok');
+    return {
+      ok: true,
+      code,
+      emailTimestamp: parsedTimestamp,
+      preview: (opened?.combinedText || meta.combinedText).slice(0, 160),
+    };
+  }
+
   function buildItemSignature(item) {
     const meta = getThreadItemMetadata(item);
     return normalizeText([
@@ -225,11 +387,16 @@ if (isTopFrame) {
     const { senderFilters, subjectFilters, maxAttempts, intervalMs, excludeCodes = [] } = payload;
     const excludedCodeSet = new Set(excludeCodes.filter(Boolean));
     const FALLBACK_AFTER = 3;
-    const normalizedSenderFilters = senderFilters.map((filter) => String(filter || '').toLowerCase()).filter(Boolean);
-    const normalizedSubjectFilters = subjectFilters.map((filter) => String(filter || '').toLowerCase()).filter(Boolean);
+    const filters = buildVerificationMailFilters({ senderFilters, subjectFilters });
 
     log(`步骤 ${step}：开始轮询 iCloud 邮箱（最多 ${maxAttempts} 次）`);
     await waitForElement('.content-container', 10000);
+
+    const firstPassResult = await tryReadNearTimeFirstPass(step, payload, filters, excludedCodeSet);
+    if (firstPassResult?.code) {
+      return firstPassResult;
+    }
+
     await sleep(1500);
 
     const existingSignatures = new Set(collectThreadItems().map(buildItemSignature));
@@ -253,12 +420,9 @@ if (isTopFrame) {
         }
 
         const meta = getThreadItemMetadata(item);
-        const lowerSender = meta.sender.toLowerCase();
-        const lowerSubject = normalizeText([meta.subject, meta.preview].join(' ')).toLowerCase();
-        const senderMatch = normalizedSenderFilters.some((filter) => lowerSender.includes(filter));
-        const subjectMatch = normalizedSubjectFilters.some((filter) => lowerSubject.includes(filter));
+        const match = doesThreadMetadataMatchFilters(meta, filters);
 
-        if (!senderMatch && !subjectMatch) {
+        if (!match.matched) {
           continue;
         }
 
@@ -267,11 +431,7 @@ if (isTopFrame) {
 
         if (!code) {
           opened = await openMailItemAndRead(item);
-          const openedSender = opened.sender.toLowerCase();
-          const openedBody = opened.bodyText.toLowerCase();
-          const openedSenderMatch = normalizedSenderFilters.some((filter) => openedSender.includes(filter));
-          const openedSubjectMatch = normalizedSubjectFilters.some((filter) => openedBody.includes(filter));
-          if (!openedSenderMatch && !openedSubjectMatch && !senderMatch && !subjectMatch) {
+          if (!doesOpenedMailMatchFilters(opened, filters, match)) {
             continue;
           }
           code = extractVerificationCode(opened.combinedText);
