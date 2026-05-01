@@ -5,6 +5,7 @@
 console.log('[MultiPage:signup-page] Content script loaded on', location.href);
 
 const SIGNUP_PAGE_LISTENER_SENTINEL = 'data-multipage-signup-page-listener';
+const fillCodeInFlightRequests = new Map();
 
 if (document.documentElement.getAttribute(SIGNUP_PAGE_LISTENER_SENTINEL) !== '1') {
   document.documentElement.setAttribute(SIGNUP_PAGE_LISTENER_SENTINEL, '1');
@@ -74,7 +75,7 @@ async function handleCommand(message) {
       }
     case 'FILL_CODE':
       // Step 4 = signup code, Step 7 = login code (same handler)
-      return await fillVerificationCode(message.step, message.payload);
+      return await runFillVerificationCodeOnce(message.step, message.payload);
     case 'GET_LOGIN_AUTH_STATE':
       return serializeLoginAuthState(inspectLoginAuthState());
     case 'PREPARE_SIGNUP_VERIFICATION':
@@ -2670,6 +2671,26 @@ async function fillVerificationCode(step, payload) {
   }
 
   return outcome;
+}
+
+async function runFillVerificationCodeOnce(step, payload = {}) {
+  const code = String(payload?.code || '').trim();
+  const key = `${Number(step) || 0}:${code}`;
+  const existing = fillCodeInFlightRequests.get(key);
+  if (existing) {
+    log(`步骤 ${step}：同一验证码正在提交中，复用当前提交结果，避免重复点击。`, 'warn');
+    return await existing;
+  }
+
+  const request = fillVerificationCode(step, payload);
+  fillCodeInFlightRequests.set(key, request);
+  try {
+    return await request;
+  } finally {
+    if (fillCodeInFlightRequests.get(key) === request) {
+      fillCodeInFlightRequests.delete(key);
+    }
+  }
 }
 
 // ============================================================

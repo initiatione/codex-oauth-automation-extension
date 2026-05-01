@@ -160,3 +160,50 @@ return {
   assert.equal(snapshot.submitClicked, true);
   assert.deepStrictEqual(snapshot.clicks, ['Continue']);
 });
+
+test('runFillVerificationCodeOnce reuses in-flight submit for the same code', async () => {
+  const api = new Function(`
+const logs = [];
+const fillCodeInFlightRequests = new Map();
+let fillCalls = 0;
+let resolveFill;
+
+function log(message, level = 'info') {
+  logs.push({ message, level });
+}
+
+async function fillVerificationCode(step, payload) {
+  fillCalls += 1;
+  return await new Promise((resolve) => {
+    resolveFill = () => resolve({ success: true, step, code: payload.code });
+  });
+}
+
+${extractFunction('runFillVerificationCodeOnce')}
+
+return {
+  async run() {
+    const first = runFillVerificationCodeOnce(8, { code: '931011' });
+    const second = runFillVerificationCodeOnce(8, { code: '931011' });
+    resolveFill();
+    return await Promise.all([first, second]);
+  },
+  snapshot() {
+    return { fillCalls, logs };
+  },
+};
+`)();
+
+  const result = await api.run();
+  const snapshot = api.snapshot();
+
+  assert.deepStrictEqual(result, [
+    { success: true, step: 8, code: '931011' },
+    { success: true, step: 8, code: '931011' },
+  ]);
+  assert.equal(snapshot.fillCalls, 1);
+  assert.equal(
+    snapshot.logs.some(({ message }) => /避免重复点击/.test(message)),
+    true
+  );
+});

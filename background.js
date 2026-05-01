@@ -5699,8 +5699,15 @@ async function setFreeReusablePhoneActivation(record = {}) {
   }
   const state = await getState();
   const activationId = String(record.activationId || record.id || record.activation || '').trim();
-  const countryId = Number(record.countryId) || Number(state.heroSmsCountryId) || HERO_SMS_COUNTRY_ID;
-  const countryLabel = String(record.countryLabel || '').trim() || getHeroSmsCountryLabelById(countryId);
+  const countryId = Math.max(1, Math.floor(Number(record.countryId) || Number(state.heroSmsCountryId) || HERO_SMS_COUNTRY_ID));
+  const stateCountryLabel = Math.floor(Number(state.heroSmsCountryId) || 0) === countryId
+    ? String(state.heroSmsCountryLabel || '').trim()
+    : '';
+  const countryLabel = String(
+    record.countryLabel
+    || stateCountryLabel
+    || (countryId === HERO_SMS_COUNTRY_ID ? HERO_SMS_COUNTRY_LABEL : `Country #${countryId}`)
+  ).trim();
   const activation = {
     ...(activationId ? { activationId } : {}),
     phoneNumber,

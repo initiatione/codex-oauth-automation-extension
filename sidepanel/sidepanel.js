@@ -3481,6 +3481,26 @@ function updateHeroSmsRuntimeDisplay(state = {}) {
   }
 }
 
+function applyFreeReusablePhoneMutationResult(refreshedState = {}, mutationResult = {}, options = {}) {
+  const { clear = false } = options;
+  const explicitActivation = clear
+    ? null
+    : (
+      mutationResult?.freeReusablePhoneActivation
+      || mutationResult?.state?.freeReusablePhoneActivation
+      || null
+    );
+  const statePatch = {
+    ...(refreshedState || {}),
+    ...(mutationResult?.state || {}),
+    ...(clear || explicitActivation
+      ? { freeReusablePhoneActivation: explicitActivation }
+      : {}),
+  };
+  syncLatestState(statePatch);
+  updateHeroSmsRuntimeDisplay(latestState || statePatch);
+}
+
 async function loadHeroSmsCountries() {
   const countrySelect = selectHeroSmsCountry || selectHeroSmsCountryFallback;
   if (!countrySelect) {
@@ -7967,9 +7987,14 @@ inputPhoneResendThrottledAsBanned?.addEventListener('change', () => {
 
 btnClearFreeReusablePhone?.addEventListener('click', async () => {
   try {
-    await chrome.runtime.sendMessage({ type: 'CLEAR_FREE_REUSABLE_PHONE', source: 'sidepanel' });
-    const latestState = await chrome.runtime.sendMessage({ type: 'GET_STATE', source: 'sidepanel' });
-    renderState(latestState || {});
+    const clearResult = await chrome.runtime.sendMessage({ type: 'CLEAR_FREE_REUSABLE_PHONE', source: 'sidepanel' });
+    let refreshedState = {};
+    try {
+      refreshedState = await chrome.runtime.sendMessage({ type: 'GET_STATE', source: 'sidepanel' });
+    } catch (refreshError) {
+      console.warn('Failed to refresh state after clearing free reusable phone:', refreshError);
+    }
+    applyFreeReusablePhoneMutationResult(refreshedState, clearResult, { clear: true });
     showToast('已清除白嫖复用手机号', 'ok');
   } catch (error) {
     showToast(`清除失败：${error?.message || error}`, 'error');
@@ -7984,13 +8009,18 @@ btnSaveFreeReusablePhone?.addEventListener('click', async () => {
     return;
   }
   try {
-    await chrome.runtime.sendMessage({
+    const saveResult = await chrome.runtime.sendMessage({
       type: 'SET_FREE_REUSABLE_PHONE',
       source: 'sidepanel',
       payload: { phoneNumber },
     });
-    const latestState = await chrome.runtime.sendMessage({ type: 'GET_STATE', source: 'sidepanel' });
-    renderState(latestState || {});
+    let refreshedState = {};
+    try {
+      refreshedState = await chrome.runtime.sendMessage({ type: 'GET_STATE', source: 'sidepanel' });
+    } catch (refreshError) {
+      console.warn('Failed to refresh state after saving free reusable phone:', refreshError);
+    }
+    applyFreeReusablePhoneMutationResult(refreshedState, saveResult);
     showToast('已记录白嫖复用手机号', 'ok');
   } catch (error) {
     showToast(`记录失败：${error?.message || error}`, 'error');

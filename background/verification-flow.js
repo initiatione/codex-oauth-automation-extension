@@ -1084,6 +1084,18 @@
           );
 
           throwIfStopped();
+          const normalizedCode = String(result?.code || '').trim();
+          if (rejectedCodes.has(normalizedCode)) {
+            await addLog(
+              `步骤 ${step}：忽略已被页面拒绝的${getVerificationCodeLabel(step)}验证码：${normalizedCode}，继续等待新验证码。`,
+              'warn'
+            );
+            if (attempt >= maxSubmitAttempts) {
+              throw new Error(`步骤 ${step}：验证码连续失败，已达到 ${maxSubmitAttempts} 次重试上限。`);
+            }
+            await sleepWithStop(resendIntervalMs > 0 ? Math.min(resendIntervalMs, 2000) : 1500);
+            continue;
+          }
           await addLog(`步骤 ${step}：已获取${getVerificationCodeLabel(step)}验证码：${result.code}`);
           if (beforeSubmit) {
             await beforeSubmit(result, {
@@ -1097,7 +1109,7 @@
           const submitResult = await submitVerificationCode(step, result.code, options);
 
           if (submitResult.invalidCode) {
-            rejectedCodes.add(result.code);
+            rejectedCodes.add(normalizedCode);
             await addLog(`步骤 ${step}：验证码被页面拒绝：${submitResult.errorText || result.code}`, 'warn');
 
             if (attempt >= maxSubmitAttempts) {

@@ -152,6 +152,73 @@ test('verification flow runs beforeSubmit hook before filling the code', async (
   ]);
 });
 
+test('verification flow does not resubmit a code after the page rejects it', async () => {
+  const submittedCodes = [];
+  const sleptMs = [];
+  let pollCalls = 0;
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async () => {},
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => {
+      pollCalls += 1;
+      return {
+        code: pollCalls <= 2 ? '931011' : '123456',
+        emailTimestamp: 100 + pollCalls,
+      };
+    },
+    sendToContentScript: async (_source, message) => {
+      if (message.type === 'FILL_CODE') {
+        submittedCodes.push(message.payload.code);
+        if (message.payload.code === '931011') {
+          return { invalidCode: true, errorText: '代码不正确' };
+        }
+      }
+      return {};
+    },
+    sendToMailContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    setStepStatus: async () => {},
+    sleepWithStop: async (ms) => {
+      sleptMs.push(ms);
+    },
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  await helpers.resolveVerificationStep(
+    8,
+    { email: 'user@example.com', lastLoginCode: null },
+    { provider: 'luckmail-api', label: 'LuckMail（API 购邮）' },
+    {
+      maxResendRequests: 0,
+      resendIntervalMs: 0,
+    }
+  );
+
+  assert.deepStrictEqual(submittedCodes, ['931011', '123456']);
+  assert.equal(pollCalls, 3);
+  assert.deepStrictEqual(sleptMs, [15000, 1500]);
+});
+
 test('verification flow skips 2925 mailbox preclear when using a fixed login mail window and still clears after success', async () => {
   const mailMessages = [];
 

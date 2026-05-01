@@ -131,7 +131,11 @@ test('free reusable phone save button records phone number through runtime messa
   assert.match(block, /type:\s*'SET_FREE_REUSABLE_PHONE'/);
   assert.match(block, /payload:\s*\{\s*phoneNumber\s*\}/s);
   assert.match(block, /type:\s*'GET_STATE'/);
-  assert.match(block, /renderState\(latestState \|\| \{\}\)/);
+  assert.match(block, /const saveResult = await chrome\.runtime\.sendMessage/);
+  assert.match(block, /catch \(refreshError\)/);
+  assert.match(block, /applyFreeReusablePhoneMutationResult\(refreshedState,\s*saveResult\)/);
+  assert.doesNotMatch(block, /applySettingsState/);
+  assert.doesNotMatch(block, /renderState/);
 });
 
 test('free reusable phone clear button uses chrome runtime messaging directly', () => {
@@ -144,8 +148,144 @@ test('free reusable phone clear button uses chrome runtime messaging directly', 
 
   assert.match(block, /chrome\.runtime\.sendMessage\(\{\s*type:\s*'CLEAR_FREE_REUSABLE_PHONE'/s);
   assert.match(block, /chrome\.runtime\.sendMessage\(\{\s*type:\s*'GET_STATE'/s);
-  assert.match(block, /renderState\(latestState \|\| \{\}\)/);
+  assert.match(block, /const clearResult = await chrome\.runtime\.sendMessage/);
+  assert.match(block, /catch \(refreshError\)/);
+  assert.match(block, /applyFreeReusablePhoneMutationResult\(refreshedState,\s*clearResult,\s*\{\s*clear:\s*true\s*\}\)/);
+  assert.doesNotMatch(block, /applySettingsState/);
+  assert.doesNotMatch(block, /renderState/);
   assert.doesNotMatch(block, /await sendMessage\(/);
+});
+
+test('free reusable phone mutation result updates latest state when refresh is stale', () => {
+  const api = new Function(`
+let latestState = {
+  heroSmsCountryId: 52,
+  heroSmsCountryLabel: 'Thailand',
+  freeReusablePhoneActivation: null,
+};
+const displayFreeReusablePhone = { textContent: '' };
+const displayFreeReusablePhoneCountry = { textContent: '' };
+const displayHeroSmsCurrentNumber = { textContent: '' };
+const displayHeroSmsCurrentCode = { textContent: '' };
+const inputFreeReusablePhone = { value: '' };
+function normalizeHeroSmsCountryLabel(value) { return String(value || '').trim(); }
+function getHeroSmsCountryLabelById(id) { return id === 6 ? 'Indonesia' : ''; }
+function syncLatestState(nextState) {
+  latestState = {
+    ...(latestState || {}),
+    ...(nextState || {}),
+  };
+}
+
+${extractFunction('updateHeroSmsRuntimeDisplay')}
+${extractFunction('applyFreeReusablePhoneMutationResult')}
+
+return {
+  run() {
+    const saveResult = {
+      freeReusablePhoneActivation: {
+        phoneNumber: '12312312',
+        countryId: 6,
+        countryLabel: 'Indonesia',
+      },
+    };
+    const refreshedState = {
+      heroSmsCountryId: 52,
+      heroSmsCountryLabel: 'Thailand',
+      freeReusablePhoneActivation: null,
+    };
+    applyFreeReusablePhoneMutationResult(refreshedState, saveResult);
+  },
+  snapshot() {
+    return {
+      latestState,
+      display: displayFreeReusablePhone.textContent,
+      country: displayFreeReusablePhoneCountry.textContent,
+      input: inputFreeReusablePhone.value,
+    };
+  },
+};
+`)();
+
+  api.run();
+
+  assert.deepStrictEqual(api.snapshot(), {
+    latestState: {
+      heroSmsCountryId: 52,
+      heroSmsCountryLabel: 'Thailand',
+      freeReusablePhoneActivation: {
+        phoneNumber: '12312312',
+        countryId: 6,
+        countryLabel: 'Indonesia',
+      },
+    },
+    display: '12312312 / Indonesia',
+    country: '地区：Indonesia',
+    input: '12312312',
+  });
+});
+
+test('free reusable phone clear forces latest state to empty', () => {
+  const api = new Function(`
+let latestState = {
+  freeReusablePhoneActivation: {
+    phoneNumber: '12312312',
+    countryId: 6,
+    countryLabel: 'Indonesia',
+  },
+};
+const displayFreeReusablePhone = { textContent: '' };
+const displayFreeReusablePhoneCountry = { textContent: '' };
+const displayHeroSmsCurrentNumber = { textContent: '' };
+const displayHeroSmsCurrentCode = { textContent: '' };
+const inputFreeReusablePhone = { value: '12312312' };
+function normalizeHeroSmsCountryLabel(value) { return String(value || '').trim(); }
+function getHeroSmsCountryLabelById(id) { return id === 6 ? 'Indonesia' : ''; }
+function syncLatestState(nextState) {
+  latestState = {
+    ...(latestState || {}),
+    ...(nextState || {}),
+  };
+}
+
+${extractFunction('updateHeroSmsRuntimeDisplay')}
+${extractFunction('applyFreeReusablePhoneMutationResult')}
+
+return {
+  run() {
+    applyFreeReusablePhoneMutationResult(
+      {
+        freeReusablePhoneActivation: {
+          phoneNumber: '12312312',
+          countryId: 6,
+          countryLabel: 'Indonesia',
+        },
+      },
+      {},
+      { clear: true }
+    );
+  },
+  snapshot() {
+    return {
+      latestState,
+      display: displayFreeReusablePhone.textContent,
+      country: displayFreeReusablePhoneCountry.textContent,
+      input: inputFreeReusablePhone.value,
+    };
+  },
+};
+`)();
+
+  api.run();
+
+  assert.deepStrictEqual(api.snapshot(), {
+    latestState: {
+      freeReusablePhoneActivation: null,
+    },
+    display: '未记录',
+    country: '地区：',
+    input: '',
+  });
 });
 
 test('updatePhoneVerificationSettingsUI toggles HeroSMS rows from the sms switch', () => {
