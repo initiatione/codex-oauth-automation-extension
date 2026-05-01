@@ -61,6 +61,10 @@
     const PHONE_RESEND_THROTTLED_ERROR_PREFIX = 'PHONE_RESEND_THROTTLED::';
     const PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX = 'PHONE_RESEND_BANNED_NUMBER::';
     const PHONE_MANUAL_FREE_REUSE_ERROR_PREFIX = 'PHONE_MANUAL_FREE_REUSE::';
+    const PHONE_AUTO_FREE_REUSE_PREPARE_ERROR_PREFIX = 'PHONE_AUTO_FREE_REUSE_PREPARE::';
+    const FREE_PHONE_REUSE_PREPARE_TIMEOUT_MS = 20000;
+    const FREE_PHONE_REUSE_PREPARE_INTERVAL_MS = 2000;
+    const FREE_PHONE_REUSE_PREPARE_MAX_ROUNDS = 10;
     const PHONE_SMS_FAILURE_SKIP_THRESHOLD = 2;
 
     function normalizeUrl(value, fallback = DEFAULT_HERO_SMS_BASE_URL) {
@@ -183,6 +187,11 @@
 
     function normalizeFreePhoneReuseEnabled(value) {
       return Boolean(value);
+    }
+
+    function normalizeFreePhoneReuseAutoEnabled(state = {}) {
+      return normalizeFreePhoneReuseEnabled(state?.freePhoneReuseEnabled)
+        && Boolean(state?.freePhoneReuseAutoEnabled);
     }
 
     function normalizeHeroSmsAcquirePriority(value = '') {
@@ -407,6 +416,38 @@
       return String(raw || '').trim();
     }
 
+    function extractHeroSmsVerificationCode(rawCode) {
+      const trimmed = String(rawCode || '').trim();
+      if (!trimmed) {
+        return '';
+      }
+      const digitMatch = trimmed.match(/\b(\d{4,8})\b/);
+      return digitMatch?.[1] || trimmed;
+    }
+
+    function extractHeroSmsV2Code(payload) {
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        return '';
+      }
+      return (
+        extractHeroSmsVerificationCode(payload.sms?.code)
+        || extractHeroSmsVerificationCode(payload.call?.code)
+      );
+    }
+
+    function isHeroSmsWaitingStatusText(statusText) {
+      return /^STATUS_(WAIT_CODE|WAIT_RETRY|WAIT_RESEND)(?::.*)?$/i.test(String(statusText || '').trim());
+    }
+
+    function isHeroSmsV2WaitingPayload(payload) {
+      return Boolean(
+        payload
+        && typeof payload === 'object'
+        && !Array.isArray(payload)
+        && !extractHeroSmsV2Code(payload)
+      );
+    }
+
     function parseHeroSmsPayload(text) {
       const trimmed = String(text || '').trim();
       if (!trimmed) {
@@ -462,6 +503,14 @@
         return true;
       }
       return /无法向此电话号码发送短信|无法向此手机号发送短信|无法发送短信到此电话号码|无法发送短信到此手机号|can(?:not|'t)\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number|unable\s+to\s+send\s+(?:an?\s+)?(?:sms|text(?:\s+message)?)\s+to\s+(?:this|that)\s+(?:phone\s+)?number/i.test(message);
+    }
+
+    function shouldTreatResendThrottledAsBanned(state = {}) {
+      return Boolean(state?.phoneResendThrottledAsBannedEnabled);
+    }
+
+    function buildHighRiskResendThrottledError(message = '') {
+      return new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${message || 'OpenAI resend is throttled and configured as high-probability banned phone.'}`);
     }
 
     function buildPhoneRestartStep7Error(phoneNumber = '') {
@@ -1076,6 +1125,124 @@
       }
     }
 
+    async function prepareFreeReusablePhoneActivation(state = {}, activation) {
+      const normalizedActivation = normalizeFreeReusablePhoneActivation(activation);
+      if (!normalizedActivation) {
+        return {
+          ok: false,
+          reason: 'missing_free_reusable_activation',
+          message: 'Free reusable phone activation is missing.',
+        };
+      }
+
+      const statusAction = resolveActivationStatusAction(normalizedActivation);
+      const config = resolvePhoneConfig(state);
+      const start = Date.now();
+      let lastStatus = '';
+      let prepareRound = 0;
+
+      while (
+        Date.now() - start < FREE_PHONE_REUSE_PREPARE_TIMEOUT_MS
+        && prepareRound < FREE_PHONE_REUSE_PREPARE_MAX_ROUNDS
+      ) {
+        throwIfStopped();
+        prepareRound += 1;
+
+        try {
+          await setPhoneActivationStatus(
+            state,
+            normalizedActivation,
+            3,
+            'HeroSMS setStatus(3) for automatic free reuse'
+          );
+        } catch (error) {
+          return {
+            ok: false,
+            reason: 'set_status_failed',
+            message: error.message || 'HeroSMS setStatus(3) failed.',
+            lastStatus,
+            prepareRound,
+          };
+        }
+
+        await addLog(
+          `Step 9: automatic free reuse reactivated ${normalizedActivation.phoneNumber}; checking status after ${Math.ceil(FREE_PHONE_REUSE_PREPARE_INTERVAL_MS / 1000)}s (${prepareRound}/${FREE_PHONE_REUSE_PREPARE_MAX_ROUNDS}).`,
+          'info'
+        );
+        await sleepWithStop(FREE_PHONE_REUSE_PREPARE_INTERVAL_MS);
+
+        let payload;
+        try {
+          payload = await fetchHeroSmsPayload(config, {
+            action: statusAction,
+            id: normalizedActivation.activationId,
+          }, `HeroSMS ${statusAction} for automatic free reuse`);
+        } catch (error) {
+          return {
+            ok: false,
+            reason: 'status_poll_failed',
+            message: error.message || 'HeroSMS status poll failed.',
+            lastStatus,
+            prepareRound,
+          };
+        }
+
+        const statusText = describeHeroSmsPayload(payload);
+        lastStatus = statusText;
+        await addLog(
+          `Step 9: automatic free reuse status for ${normalizedActivation.phoneNumber}: ${statusText || 'empty response'} (${prepareRound}/${FREE_PHONE_REUSE_PREPARE_MAX_ROUNDS}).`,
+          'info'
+        );
+
+        if (isHeroSmsWaitingStatusText(statusText) || (statusAction === 'getStatusV2' && isHeroSmsV2WaitingPayload(payload))) {
+          await addLog(
+            `Step 9: automatic free reuse confirmed waiting state for ${normalizedActivation.phoneNumber}; submitting saved phone.`,
+            'info'
+          );
+          return {
+            ok: true,
+            activation: {
+              ...normalizedActivation,
+              source: 'free-auto-reuse',
+              phoneCodeReceived: true,
+            },
+            statusText,
+          };
+        }
+
+        if (/^STATUS_OK:/i.test(statusText) || extractHeroSmsV2Code(payload)) {
+          await addLog(
+            `Step 9: automatic free reuse still sees old code for ${normalizedActivation.phoneNumber}; retrying preparation (${prepareRound}/${FREE_PHONE_REUSE_PREPARE_MAX_ROUNDS}).`,
+            'warn'
+          );
+          continue;
+        }
+
+        if (/^STATUS_CANCEL$/i.test(statusText)) {
+          return {
+            ok: false,
+            reason: 'activation_cancelled',
+            message: 'HeroSMS activation was cancelled before automatic free reuse.',
+            lastStatus,
+            prepareRound,
+          };
+        }
+
+        await addLog(
+          `Step 9: automatic free reuse not ready for ${normalizedActivation.phoneNumber}: ${statusText || 'empty response'}; retrying preparation (${prepareRound}/${FREE_PHONE_REUSE_PREPARE_MAX_ROUNDS}).`,
+          'warn'
+        );
+      }
+
+      return {
+        ok: false,
+        reason: 'prepare_timeout',
+        message: `Timed out waiting for saved phone to enter SMS waiting state. Last status: ${lastStatus || 'unknown'}.`,
+        lastStatus,
+        prepareRound,
+      };
+    }
+
     async function pollPhoneActivationCode(state = {}, activation, options = {}) {
       const normalizedActivation = normalizeActivation(activation);
       if (!normalizedActivation) {
@@ -1123,23 +1290,8 @@
           });
         }
 
-        const extractVerificationCode = (rawCode) => {
-          const trimmed = String(rawCode || '').trim();
-          if (!trimmed) {
-            return '';
-          }
-          const digitMatch = trimmed.match(/\b(\d{4,8})\b/);
-          return digitMatch?.[1] || trimmed;
-        };
-
         const v2Code = (
-          payload
-          && typeof payload === 'object'
-          && !Array.isArray(payload)
-          && (
-            extractVerificationCode(payload.sms?.code)
-            || extractVerificationCode(payload.call?.code)
-          )
+          extractHeroSmsV2Code(payload)
         );
         if (v2Code) {
           return v2Code;
@@ -1152,7 +1304,7 @@
           return digitMatch?.[1] || rawCode;
         }
 
-        if (/^STATUS_(WAIT_CODE|WAIT_RETRY|WAIT_RESEND)$/i.test(text)) {
+        if (isHeroSmsWaitingStatusText(text)) {
           await sleepWithStop(intervalMs);
           continue;
         }
@@ -1420,6 +1572,56 @@
       await persistFreeReusableActivation(null);
     }
 
+    function isFreeAutoReuseActivation(activation) {
+      return normalizeActivation(activation)?.source === 'free-auto-reuse';
+    }
+
+    async function retireFreeReusableActivation(reason = '') {
+      const suffix = reason ? ` ${reason}` : '';
+      await addLog(`Step 9: cleared saved free reusable phone.${suffix}`, 'warn');
+      await clearFreeReusableActivation();
+    }
+
+    async function markFreeReusableActivationAfterAutoSuccess(state, activation) {
+      const normalizedActivation = normalizeFreeReusablePhoneActivation(activation);
+      if (!normalizedActivation || !isFreeAutoReuseActivation(activation)) {
+        return;
+      }
+
+      const latestState = {
+        ...(state || {}),
+        ...(typeof getState === 'function' ? await getState() : {}),
+      };
+      const savedActivation = normalizeFreeReusablePhoneActivation(
+        latestState[FREE_REUSABLE_PHONE_ACTIVATION_STATE_KEY]
+      );
+      if (!savedActivation || savedActivation.activationId !== normalizedActivation.activationId) {
+        return;
+      }
+
+      const successfulUses = savedActivation.successfulUses + 1;
+      const maxUses = Math.max(1, Math.floor(Number(savedActivation.maxUses) || DEFAULT_PHONE_NUMBER_MAX_USES));
+      if (successfulUses >= maxUses) {
+        await clearFreeReusableActivation();
+        await addLog(
+          `Step 9: automatic free reuse phone ${savedActivation.phoneNumber} reached ${successfulUses}/${maxUses}; retired local record.`,
+          'info'
+        );
+        return;
+      }
+
+      await persistFreeReusableActivation({
+        ...savedActivation,
+        source: 'free-manual-reuse',
+        successfulUses,
+        maxUses,
+      });
+      await addLog(
+        `Step 9: automatic free reuse phone ${savedActivation.phoneNumber} succeeded (${successfulUses}/${maxUses}); keeping it for later registrations.`,
+        'info'
+      );
+    }
+
     async function acquirePhoneActivation(state = {}, options = {}) {
       const countryCandidates = resolveCountryCandidates(state);
       const blockedCountryIds = new Set(
@@ -1472,6 +1674,9 @@
 
     async function markActivationReusableAfterSuccess(state, activation) {
       const normalizedActivation = normalizeActivation(activation);
+      if (isFreeAutoReuseActivation(normalizedActivation)) {
+        return;
+      }
       if (!normalizeHeroSmsReuseEnabled(state?.heroSmsReuseEnabled)) {
         await clearReusableActivation();
         return;
@@ -1529,6 +1734,40 @@
         return null;
       }
 
+      if (freeReusableActivation.successfulUses >= freeReusableActivation.maxUses) {
+        await retireFreeReusableActivation(
+          `Saved phone ${freeReusableActivation.phoneNumber} is exhausted (${freeReusableActivation.successfulUses}/${freeReusableActivation.maxUses}).`
+        );
+        return null;
+      }
+
+      if (normalizeFreePhoneReuseAutoEnabled(state)) {
+        await addLog(
+          `Step 9: preparing automatic free reuse for saved phone ${freeReusableActivation.phoneNumber} (${freeReusableActivation.successfulUses + 1}/${freeReusableActivation.maxUses}).`,
+          'info'
+        );
+        const prepared = await prepareFreeReusablePhoneActivation(state, freeReusableActivation);
+        if (!prepared.ok) {
+          const reason = prepared.message || prepared.reason || 'unknown error';
+          const stopMessage = `自动白嫖复用准备失败：${freeReusableActivation.phoneNumber} 未确认进入等待短信状态，本次不购买新 HeroSMS 号码。原因：${reason}`;
+          await addLog(
+            `Step 9: automatic free reuse preparation failed for ${freeReusableActivation.phoneNumber}; no new HeroSMS number will be purchased. ${reason}`,
+            'error'
+          );
+          if (prepared.reason === 'activation_cancelled') {
+            await retireFreeReusableActivation(
+              `Automatic free reuse phone ${freeReusableActivation.phoneNumber} is cancelled on HeroSMS.`
+            );
+          }
+          if (typeof requestStop === 'function') {
+            await requestStop({ logMessage: stopMessage });
+          }
+          throw new Error(`${PHONE_AUTO_FREE_REUSE_PREPARE_ERROR_PREFIX}${stopMessage}`);
+        }
+        await persistCurrentActivation(prepared.activation);
+        return prepared.activation;
+      }
+
       const fillResult = await fillPhoneNumberOnly(tabId, freeReusableActivation);
       await clearCurrentActivation();
       const message = `开始手动复用手机 ${freeReusableActivation.phoneNumber}，请到 SMS 上刷新。`;
@@ -1573,13 +1812,19 @@
             intervalMs: pollIntervalSeconds * 1000,
             maxRounds: pollMaxRounds,
             onStatus: async ({ elapsedMs, pollCount, statusText }) => {
-              if (/^STATUS_(WAIT_CODE|WAIT_RETRY|WAIT_RESEND)$/i.test(String(statusText || ''))) {
+              if (isHeroSmsWaitingStatusText(statusText)) {
                 const pageError = await checkPhoneResendPageError(tabId);
                 if (pageError?.reason === 'resend_phone_banned') {
                   throw new Error(`${PHONE_RESEND_BANNED_NUMBER_ERROR_PREFIX}${pageError.message || 'OpenAI could not send SMS to this phone number.'}`);
                 }
                 if (pageError?.reason === 'resend_throttled') {
-                  throw new Error(`${PHONE_RESEND_THROTTLED_ERROR_PREFIX}${pageError.message || 'OpenAI resend is throttled.'}`);
+                  if (shouldTreatResendThrottledAsBanned(state)) {
+                    throw buildHighRiskResendThrottledError(pageError.message);
+                  }
+                  await addLog(
+                    `Step 9: detected resend throttling for ${normalizedActivation.phoneNumber}, but high-probability banned replacement is disabled; continuing SMS wait. ${pageError.message || ''}`.trim(),
+                    'warn'
+                  );
                 }
               }
 
@@ -1616,15 +1861,23 @@
             };
           }
           if (isPhoneResendThrottledError(error)) {
+            if (shouldTreatResendThrottledAsBanned(state)) {
+              await addLog(
+                `Step 9: resend is throttled for ${normalizedActivation.phoneNumber} during SMS wait and is configured as high-probability banned; replacing number immediately. ${error.message}`,
+                'warn'
+              );
+              return {
+                code: '',
+                replaceNumber: true,
+                reason: 'resend_throttled_high_risk_banned',
+              };
+            }
             await addLog(
-              `Step 9: resend is throttled for ${normalizedActivation.phoneNumber} during SMS wait, replacing number immediately. ${error.message}`,
+              `Step 9: resend is throttled for ${normalizedActivation.phoneNumber} during SMS wait, but high-probability banned replacement is disabled; continuing existing SMS wait behavior. ${error.message}`,
               'warn'
             );
-            return {
-              code: '',
-              replaceNumber: true,
-              reason: 'resend_throttled',
-            };
+            await sleepWithStop(pollIntervalSeconds * 1000);
+            continue;
           }
           if (!isPhoneCodeTimeoutError(error)) {
             throw error;
@@ -1660,15 +1913,22 @@
                 };
               }
               if (isPhoneResendThrottledError(resendError)) {
+                if (shouldTreatResendThrottledAsBanned(state)) {
+                  await addLog(
+                    `Step 9: resend is throttled for ${normalizedActivation.phoneNumber} and is configured as high-probability banned; replacing number immediately. ${resendError.message}`,
+                    'warn'
+                  );
+                  return {
+                    code: '',
+                    replaceNumber: true,
+                    reason: 'resend_throttled_high_risk_banned',
+                  };
+                }
                 await addLog(
-                  `Step 9: resend is throttled for ${normalizedActivation.phoneNumber}, replacing number immediately. ${resendError.message}`,
+                  `Step 9: resend is throttled for ${normalizedActivation.phoneNumber}, but high-probability banned replacement is disabled; continuing SMS wait. ${resendError.message}`,
                   'warn'
                 );
-                return {
-                  code: '',
-                  replaceNumber: true,
-                  reason: 'resend_throttled',
-                };
+                continue;
               }
               await addLog(`Step 9: failed to click resend on the phone verification page. ${resendError.message}`, 'warn');
             }
@@ -1752,12 +2012,16 @@
 
           if (pageState?.addPhonePage) {
             if (!activation) {
-              await handoffFreeReusablePhone(tabId, state);
-              activation = await acquirePhoneActivation(state, {
-                blockedCountryIds: getBlockedCountryIds(),
-              });
-              shouldCancelActivation = true;
-              await persistCurrentActivation(activation);
+              activation = await handoffFreeReusablePhone(tabId, state);
+              if (activation) {
+                shouldCancelActivation = false;
+              } else {
+                activation = await acquirePhoneActivation(state, {
+                  blockedCountryIds: getBlockedCountryIds(),
+                });
+                shouldCancelActivation = true;
+                await persistCurrentActivation(activation);
+              }
               addPhoneReentryWithSameActivation = 0;
             } else if (preferReuseExistingActivationOnAddPhone) {
               addPhoneReentryWithSameActivation += 1;
@@ -1772,6 +2036,11 @@
                   `Step 9: current number ${activation.phoneNumber} returned to add-phone repeatedly, replacing number (${usedNumberReplacementAttempts}/${maxNumberReplacementAttempts}).`,
                   'warn'
                 );
+                if (isFreeAutoReuseActivation(activation)) {
+                  await retireFreeReusableActivation(
+                    `Automatic free reuse phone ${activation.phoneNumber} returned to add-phone repeatedly.`
+                  );
+                }
                 if (shouldCancelActivation && activation) {
                   await cancelPhoneActivation(state, activation);
                 }
@@ -1808,6 +2077,11 @@
                   `Step 9: add-phone rejected ${activation.phoneNumber} as already used (${addPhoneRejectText}), replacing number (${usedNumberReplacementAttempts}/${maxNumberReplacementAttempts}).`,
                   'warn'
                 );
+                if (isFreeAutoReuseActivation(activation)) {
+                  await retireFreeReusableActivation(
+                    `Automatic free reuse phone ${activation.phoneNumber} was rejected as already used.`
+                  );
+                }
                 if (shouldCancelActivation && activation) {
                   await cancelPhoneActivation(state, activation);
                 }
@@ -1936,13 +2210,19 @@
                     break;
                   }
                   if (isPhoneResendThrottledError(resendError)) {
-                    shouldReplaceNumber = true;
-                    replaceReason = 'resend_throttled';
+                    if (shouldTreatResendThrottledAsBanned(state)) {
+                      shouldReplaceNumber = true;
+                      replaceReason = 'resend_throttled_high_risk_banned';
+                      await addLog(
+                        `Step 9: resend is throttled for ${activation.phoneNumber} and is configured as high-probability banned; replacing number immediately. ${resendError.message}`,
+                        'warn'
+                      );
+                      break;
+                    }
                     await addLog(
-                      `Step 9: resend is throttled for ${activation.phoneNumber}, replacing number immediately. ${resendError.message}`,
+                      `Step 9: resend is throttled for ${activation.phoneNumber}, but high-probability banned replacement is disabled; continuing existing code retry behavior. ${resendError.message}`,
                       'warn'
                     );
-                    break;
                   }
                   await addLog(`Step 9: failed to click resend after code rejection. ${resendError.message}`, 'warn');
                 }
@@ -1964,9 +2244,15 @@
                 `Step 9: skipped HeroSMS completion setStatus(6) for ${activation.phoneNumber} to preserve the phone for manual free reuse.`,
                 'info'
               );
+            } else if (isFreeAutoReuseActivation(activation)) {
+              await addLog(
+                `Step 9: skipped HeroSMS completion setStatus(6) for ${activation.phoneNumber} to preserve the phone for automatic free reuse.`,
+                'info'
+              );
             } else {
               await completePhoneActivation(state, activation);
             }
+            await markFreeReusableActivationAfterAutoSuccess(state, activation);
             await markActivationReusableAfterSuccess(state, activation);
             clearCountrySmsFailure(activation.countryId);
             shouldCancelActivation = false;
@@ -1985,7 +2271,7 @@
 
           if (
             activation
-            && (replaceReason === 'resend_throttled' || /^sms_timeout_after_/i.test(String(replaceReason || '')))
+            && (/^resend_throttled/i.test(String(replaceReason || '')) || /^sms_timeout_after_/i.test(String(replaceReason || '')))
           ) {
             await markCountrySmsFailure(activation.countryId, replaceReason || 'sms_timeout');
           }
@@ -1997,6 +2283,11 @@
             );
           }
 
+          if (isFreeAutoReuseActivation(activation)) {
+            await retireFreeReusableActivation(
+              `Automatic free reuse phone ${activation.phoneNumber} is being replaced after ${replaceReason || 'unknown failure'}.`
+            );
+          }
           if (shouldCancelActivation && activation) {
             await cancelPhoneActivation(state, activation);
           }
@@ -2024,8 +2315,17 @@
           };
         }
       } catch (error) {
-        if (String(error?.message || '').startsWith(PHONE_MANUAL_FREE_REUSE_ERROR_PREFIX)) {
+        const errorMessage = String(error?.message || '');
+        if (
+          errorMessage.startsWith(PHONE_MANUAL_FREE_REUSE_ERROR_PREFIX)
+          || errorMessage.startsWith(PHONE_AUTO_FREE_REUSE_PREPARE_ERROR_PREFIX)
+        ) {
           throw error;
+        }
+        if (isFreeAutoReuseActivation(activation)) {
+          await retireFreeReusableActivation(
+            `Automatic free reuse phone ${activation.phoneNumber} failed: ${error.message || 'unknown error'}.`
+          );
         }
         if (shouldCancelActivation && activation) {
           await cancelPhoneActivation(state, activation);

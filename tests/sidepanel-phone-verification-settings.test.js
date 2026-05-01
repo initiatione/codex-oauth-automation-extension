@@ -79,11 +79,18 @@ test('sidepanel html exposes phone verification toggle and dedicated HeroSMS row
   assert.match(html, /id="row-phone-code-poll-max-rounds"/);
   assert.match(html, /id="row-free-phone-reuse-enabled"/);
   assert.match(html, /id="input-free-phone-reuse-enabled"/);
+  assert.match(html, /id="row-free-phone-reuse-auto-enabled"/);
+  assert.match(html, /id="input-free-phone-reuse-auto-enabled"/);
+  assert.match(html, /id="row-phone-resend-throttled-as-banned"/);
+  assert.match(html, /id="input-phone-resend-throttled-as-banned"/);
   assert.match(html, /id="row-free-reusable-phone"/);
   assert.match(html, /id="display-free-reusable-phone"/);
   assert.match(html, /id="btn-clear-free-reusable-phone"/);
   assert.match(html, /平台同号重激活/);
   assert.match(html, /白嫖复用/);
+  assert.match(html, /自动白嫖复用/);
+  assert.match(html, /限流大概率封号/);
+  assert.match(html, /可能误判并丢弃仍可恢复的号码/);
   assert.match(html, /白嫖号码/);
   assert.match(html, /id="row-oauth-flow-timeout"/);
   assert.match(html, /id="input-oauth-flow-timeout-enabled"/);
@@ -133,7 +140,11 @@ const rowPhoneCodeTimeoutWindows = { style: { display: 'none' } };
 const rowPhoneCodePollIntervalSeconds = { style: { display: 'none' } };
 const rowPhoneCodePollMaxRounds = { style: { display: 'none' } };
 const rowFreePhoneReuseEnabled = { style: { display: 'none' } };
+const rowFreePhoneReuseAutoEnabled = { style: { display: 'none' } };
+const rowPhoneResendThrottledAsBanned = { style: { display: 'none' } };
 const rowFreeReusablePhone = { style: { display: 'none' } };
+const inputFreePhoneReuseEnabled = { checked: false };
+const inputFreePhoneReuseAutoEnabled = { checked: true, disabled: false, title: '' };
 
 ${extractFunction('updatePhoneVerificationSettingsUI')}
 
@@ -158,7 +169,11 @@ return {
   rowPhoneCodePollIntervalSeconds,
   rowPhoneCodePollMaxRounds,
   rowFreePhoneReuseEnabled,
+  rowFreePhoneReuseAutoEnabled,
+  rowPhoneResendThrottledAsBanned,
   rowFreeReusablePhone,
+  inputFreePhoneReuseEnabled,
+  inputFreePhoneReuseAutoEnabled,
   updatePhoneVerificationSettingsUI,
 };
 `)();
@@ -184,7 +199,10 @@ return {
   assert.equal(api.rowPhoneCodePollIntervalSeconds.style.display, 'none');
   assert.equal(api.rowPhoneCodePollMaxRounds.style.display, 'none');
   assert.equal(api.rowFreePhoneReuseEnabled.style.display, 'none');
+  assert.equal(api.rowFreePhoneReuseAutoEnabled.style.display, 'none');
+  assert.equal(api.rowPhoneResendThrottledAsBanned.style.display, 'none');
   assert.equal(api.rowFreeReusablePhone.style.display, 'none');
+  assert.equal(api.inputFreePhoneReuseAutoEnabled.disabled, true);
 
   api.inputPhoneVerificationEnabled.checked = true;
   api.updatePhoneVerificationSettingsUI();
@@ -207,7 +225,14 @@ return {
   assert.equal(api.rowPhoneCodePollIntervalSeconds.style.display, '');
   assert.equal(api.rowPhoneCodePollMaxRounds.style.display, '');
   assert.equal(api.rowFreePhoneReuseEnabled.style.display, '');
+  assert.equal(api.rowFreePhoneReuseAutoEnabled.style.display, '');
+  assert.equal(api.rowPhoneResendThrottledAsBanned.style.display, '');
   assert.equal(api.rowFreeReusablePhone.style.display, '');
+  assert.equal(api.inputFreePhoneReuseAutoEnabled.disabled, true);
+
+  api.inputFreePhoneReuseEnabled.checked = true;
+  api.updatePhoneVerificationSettingsUI();
+  assert.equal(api.inputFreePhoneReuseAutoEnabled.disabled, false);
 });
 
 test('collectSettingsPayload keeps local helper sync enabled while persisting sms toggle state', () => {
@@ -261,6 +286,8 @@ const inputVerificationResendCount = { value: '4' };
 const inputHeroSmsApiKey = { value: 'demo-key' };
 const inputHeroSmsReuseEnabled = { checked: true };
 const inputFreePhoneReuseEnabled = { checked: true };
+const inputFreePhoneReuseAutoEnabled = { checked: true };
+const inputPhoneResendThrottledAsBanned = { checked: true };
 const selectHeroSmsAcquirePriority = { value: 'price' };
 const inputHeroSmsMaxPrice = { value: '0.12' };
 const inputPhoneReplacementLimit = { value: '5' };
@@ -340,6 +367,8 @@ return { collectSettingsPayload };
   assert.equal(payload.heroSmsApiKey, 'demo-key');
   assert.equal(payload.heroSmsReuseEnabled, true);
   assert.equal(payload.freePhoneReuseEnabled, true);
+  assert.equal(payload.freePhoneReuseAutoEnabled, true);
+  assert.equal(payload.phoneResendThrottledAsBannedEnabled, true);
   assert.equal(payload.heroSmsAcquirePriority, 'price');
   assert.equal(payload.heroSmsMaxPrice, '0.12');
   assert.equal(payload.phoneVerificationReplacementLimit, 5);

@@ -569,8 +569,30 @@
                 <div id="row-free-phone-reuse-enabled" class="hero-sms-settings-cell" style="display:none;">
                   <span class="hero-sms-settings-caption">白嫖复用</span>
                   <div class="setting-controls hero-sms-toggle-controls">
-                    <label class="toggle-switch" for="input-free-phone-reuse-enabled" title="开启后保存首个成功接码手机号；下次只填号码、不提交，并停止自动流程">
+                    <label class="toggle-switch" for="input-free-phone-reuse-enabled" title="开启后保存首个成功接码手机号；自动复用关闭时，下次只填号码、不提交，并停止自动流程">
                       <input type="checkbox" id="input-free-phone-reuse-enabled" />
+                      <span class="toggle-switch-track" aria-hidden="true">
+                        <span class="toggle-switch-thumb"></span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+                <div id="row-free-phone-reuse-auto-enabled" class="hero-sms-settings-cell" style="display:none;">
+                  <span class="hero-sms-settings-caption">自动白嫖复用</span>
+                  <div class="setting-controls hero-sms-toggle-controls">
+                    <label class="toggle-switch" for="input-free-phone-reuse-auto-enabled" title="开启后自动将已记录手机号设为等待短信状态，自动提交并轮询验证码；最多复用 3 次">
+                      <input type="checkbox" id="input-free-phone-reuse-auto-enabled" />
+                      <span class="toggle-switch-track" aria-hidden="true">
+                        <span class="toggle-switch-thumb"></span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+                <div id="row-phone-resend-throttled-as-banned" class="hero-sms-settings-cell" style="display:none;">
+                  <span class="hero-sms-settings-caption">限流大概率封号</span>
+                  <div class="setting-controls hero-sms-toggle-controls">
+                    <label class="toggle-switch" for="input-phone-resend-throttled-as-banned" title="开启后遇到“尝试重新发送的次数过多”会按大概率封号直接换号；可能误判并丢弃仍可恢复的号码">
+                      <input type="checkbox" id="input-phone-resend-throttled-as-banned" />
                       <span class="toggle-switch-track" aria-hidden="true">
                         <span class="toggle-switch-thumb"></span>
                       </span>

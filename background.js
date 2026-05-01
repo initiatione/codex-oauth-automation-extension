@@ -502,6 +502,8 @@ const PERSISTED_SETTING_DEFAULTS = {
   phoneCodePollIntervalSeconds: DEFAULT_PHONE_CODE_POLL_INTERVAL_SECONDS,
   phoneCodePollMaxRounds: DEFAULT_PHONE_CODE_POLL_ROUNDS,
   freePhoneReuseEnabled: false,
+  freePhoneReuseAutoEnabled: false,
+  phoneResendThrottledAsBannedEnabled: false,
   mailProvider: '163',
   mail2925Mode: DEFAULT_MAIL_2925_MODE,
   mail2925UseAccountPool: false,
@@ -1473,6 +1475,8 @@ function normalizePersistentSettingValue(key, value) {
     case 'autoRunDelayEnabled':
     case 'phoneVerificationEnabled':
     case 'freePhoneReuseEnabled':
+    case 'freePhoneReuseAutoEnabled':
+    case 'phoneResendThrottledAsBannedEnabled':
     case 'plusModeEnabled':
       return Boolean(value);
     case 'autoRunFallbackThreadIntervalMinutes':

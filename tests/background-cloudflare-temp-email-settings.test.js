@@ -228,6 +228,7 @@ const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
 const PERSISTED_SETTING_DEFAULTS = {
   panelMode: 'cpa',
   freePhoneReuseEnabled: false,
+  phoneResendThrottledAsBannedEnabled: false,
   autoStepDelaySeconds: null,
   verificationResendCount: DEFAULT_VERIFICATION_RESEND_COUNT,
   mailProvider: '163',
@@ -284,12 +285,17 @@ return {
   `)();
 
   assert.equal(api.normalizePersistentSettingValue('freePhoneReuseEnabled', 1), true);
+  assert.equal(api.normalizePersistentSettingValue('phoneResendThrottledAsBannedEnabled', 1), true);
+  assert.equal(api.normalizePersistentSettingValue('phoneResendThrottledAsBannedEnabled', 0), false);
   assert.deepEqual(api.buildPersistentSettingsPayload({
     freePhoneReuseEnabled: true,
+    phoneResendThrottledAsBannedEnabled: true,
   }), {
     freePhoneReuseEnabled: true,
+    phoneResendThrottledAsBannedEnabled: true,
   });
 
   const defaults = api.buildPersistentSettingsPayload({}, { fillDefaults: true });
   assert.equal(defaults.freePhoneReuseEnabled, false);
+  assert.equal(defaults.phoneResendThrottledAsBannedEnabled, false);
 });

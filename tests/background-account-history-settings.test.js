@@ -128,6 +128,8 @@ return {
   assert.equal(api.normalizePersistentSettingValue('plusPaymentMethod', 'unknown'), 'paypal');
   assert.equal(api.normalizePersistentSettingValue('freePhoneReuseEnabled', 1), true);
   assert.equal(api.normalizePersistentSettingValue('freePhoneReuseEnabled', 0), false);
+  assert.equal(api.normalizePersistentSettingValue('phoneResendThrottledAsBannedEnabled', 1), true);
+  assert.equal(api.normalizePersistentSettingValue('phoneResendThrottledAsBannedEnabled', 0), false);
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '7'), 7);
   assert.equal(api.normalizePersistentSettingValue('verificationResendCount', '-1'), 0);
   assert.equal(api.normalizePersistentSettingValue('phoneVerificationReplacementLimit', '9'), 9);
