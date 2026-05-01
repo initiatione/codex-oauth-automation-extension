@@ -1140,6 +1140,8 @@ test('phone verification helper skips reusable activation when reuse toggle is d
 });
 
 test('phone verification helper records free reusable phone only after a new activation receives a valid code', async () => {
+  const requests = [];
+  const logs = [];
   const stateUpdates = [];
   let currentState = {
     heroSmsApiKey: 'demo-key',
@@ -1154,10 +1156,13 @@ test('phone verification helper records free reusable phone only after a new act
 
   try {
     const helpers = api.createPhoneVerificationHelpers({
-      addLog: async () => {},
+      addLog: async (message, level) => {
+        logs.push({ message, level });
+      },
       ensureStep8SignupPageReady: async () => {},
       fetchImpl: async (url) => {
         const parsedUrl = new URL(url);
+        requests.push(parsedUrl);
         const action = parsedUrl.searchParams.get('action');
         if (action === 'getPrices') {
           return { ok: true, text: async () => buildHeroSmsPricesPayload() };
@@ -1222,6 +1227,12 @@ test('phone verification helper records free reusable phone only after a new act
       source: 'free-manual-reuse',
       recordedAt: 1777777777000,
     });
+    const setStatusRequests = requests.filter((requestUrl) => requestUrl.searchParams.get('action') === 'setStatus');
+    assert.deepStrictEqual(setStatusRequests, []);
+    assert.ok(
+      logs.some(({ message }) => /skipped HeroSMS completion setStatus\(6\).*manual free reuse/i.test(message)),
+      'expected a log explaining why HeroSMS completion was skipped'
+    );
   } finally {
     Date.now = realDateNow;
   }
@@ -1317,9 +1328,82 @@ test('phone verification helper records free reusable phone when paid reuse is d
       source: 'free-manual-reuse',
       recordedAt: 1777777777000,
     });
+    const setStatusRequests = requests.filter((requestUrl) => requestUrl.searchParams.get('action') === 'setStatus');
+    assert.deepStrictEqual(setStatusRequests, []);
   } finally {
     Date.now = realDateNow;
   }
+});
+
+test('phone verification helper preserves free reusable phone even when paid reuse is enabled', async () => {
+  const requests = [];
+  let currentState = {
+    heroSmsApiKey: 'demo-key',
+    heroSmsReuseEnabled: true,
+    freePhoneReuseEnabled: true,
+    verificationResendCount: 0,
+    currentPhoneActivation: null,
+    reusablePhoneActivation: null,
+    freeReusablePhoneActivation: null,
+  };
+
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getPrices') {
+        return { ok: true, text: async () => buildHeroSmsPricesPayload() };
+      }
+      if (action === 'getNumber') {
+        return { ok: true, text: async () => 'ACCESS_NUMBER:free-paid-on:66950008888' };
+      }
+      if (action === 'getStatus') {
+        return { ok: true, text: async () => 'STATUS_OK:888999' };
+      }
+      if (action === 'setStatus') {
+        return { ok: true, text: async () => 'ACCESS_ACTIVATION' };
+      }
+      throw new Error(`Unexpected HeroSMS action: ${action}`);
+    },
+    getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => defaultTimeoutMs,
+    getState: async () => ({ ...currentState }),
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type === 'SUBMIT_PHONE_NUMBER') {
+        return {
+          phoneVerificationPage: true,
+          url: 'https://auth.openai.com/phone-verification',
+        };
+      }
+      if (message.type === 'SUBMIT_PHONE_VERIFICATION_CODE') {
+        return {
+          success: true,
+          consentReady: true,
+          url: 'https://auth.openai.com/authorize',
+        };
+      }
+      throw new Error(`Unexpected content-script message: ${message.type}`);
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await helpers.completePhoneVerificationFlow(1, {
+    addPhonePage: true,
+    phoneVerificationPage: false,
+    url: 'https://auth.openai.com/add-phone',
+  });
+
+  const actions = requests.map((requestUrl) => requestUrl.searchParams.get('action'));
+  assert.equal(actions.includes('reactivate'), false);
+  assert.equal(actions.includes('setStatus'), false);
+  assert.equal(currentState.freeReusablePhoneActivation?.activationId, 'free-paid-on');
+  assert.equal(currentState.reusablePhoneActivation?.activationId, 'free-paid-on');
 });
 
 test('phone verification helper does not overwrite free reusable phone from paid reactivate activation', async () => {

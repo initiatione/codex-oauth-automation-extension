@@ -312,6 +312,18 @@
       };
     }
 
+    function shouldPreserveActivationForFreeReuse(state, activation) {
+      if (!normalizeFreePhoneReuseEnabled(state?.freePhoneReuseEnabled)) {
+        return false;
+      }
+      const normalizedActivation = normalizeActivation(activation);
+      return Boolean(
+        normalizedActivation
+        && normalizedActivation.source === 'hero-sms-new'
+        && normalizedActivation.phoneCodeReceived
+      );
+    }
+
     function normalizeFreeReusablePhoneActivation(record) {
       const normalized = normalizeActivation(record);
       if (!normalized) {
@@ -1874,7 +1886,14 @@
               continue;
             }
 
-            await completePhoneActivation(state, activation);
+            if (shouldPreserveActivationForFreeReuse(await getState(), activation)) {
+              await addLog(
+                `Step 9: skipped HeroSMS completion setStatus(6) for ${activation.phoneNumber} to preserve the phone for manual free reuse.`,
+                'info'
+              );
+            } else {
+              await completePhoneActivation(state, activation);
+            }
             await markActivationReusableAfterSuccess(state, activation);
             clearCountrySmsFailure(activation.countryId);
             shouldCancelActivation = false;
