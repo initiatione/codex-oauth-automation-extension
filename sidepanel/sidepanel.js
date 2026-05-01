@@ -311,6 +311,8 @@ const rowPhoneCodeWaitSeconds = document.getElementById('row-phone-code-wait-sec
 const rowPhoneCodeTimeoutWindows = document.getElementById('row-phone-code-timeout-windows');
 const rowPhoneCodePollIntervalSeconds = document.getElementById('row-phone-code-poll-interval-seconds');
 const rowPhoneCodePollMaxRounds = document.getElementById('row-phone-code-poll-max-rounds');
+const rowFreePhoneReuseEnabled = document.getElementById('row-free-phone-reuse-enabled');
+const rowFreeReusablePhone = document.getElementById('row-free-reusable-phone');
 const inputHeroSmsApiKey = document.getElementById('input-hero-sms-api-key');
 const btnToggleHeroSmsApiKey = document.getElementById('btn-toggle-hero-sms-api-key');
 const inputHeroSmsMaxPrice = document.getElementById('input-hero-sms-max-price');
@@ -320,6 +322,7 @@ const inputPhoneCodeTimeoutWindows = document.getElementById('input-phone-code-t
 const inputPhoneCodePollIntervalSeconds = document.getElementById('input-phone-code-poll-interval-seconds');
 const inputPhoneCodePollMaxRounds = document.getElementById('input-phone-code-poll-max-rounds');
 const inputHeroSmsReuseEnabled = document.getElementById('input-hero-sms-reuse-enabled');
+const inputFreePhoneReuseEnabled = document.getElementById('input-free-phone-reuse-enabled');
 const selectHeroSmsCountry = document.getElementById('select-hero-sms-country');
 const selectHeroSmsCountryFallback = document.getElementById('select-hero-sms-country-fallback');
 const selectHeroSmsAcquirePriority = document.getElementById('select-hero-sms-acquire-priority');
@@ -332,6 +335,8 @@ const displayHeroSmsPlatform = document.getElementById('display-hero-sms-platfor
 const displayHeroSmsCurrentNumber = document.getElementById('display-hero-sms-current-number');
 const displayHeroSmsPriceTiers = document.getElementById('display-hero-sms-price-tiers');
 const displayHeroSmsCurrentCode = document.getElementById('display-hero-sms-current-code');
+const displayFreeReusablePhone = document.getElementById('display-free-reusable-phone');
+const btnClearFreeReusablePhone = document.getElementById('btn-clear-free-reusable-phone');
 const displayHeroSmsCountryFallbackOrder = document.getElementById('display-hero-sms-country-fallback-order');
 const rowAccountRunHistoryHelperBaseUrl = document.getElementById('row-account-run-history-helper-base-url');
 const inputAccountRunHistoryHelperBaseUrl = document.getElementById('input-account-run-history-helper-base-url');
@@ -2499,6 +2504,9 @@ function collectSettingsPayload() {
   const heroSmsReuseEnabledValue = typeof inputHeroSmsReuseEnabled !== 'undefined' && inputHeroSmsReuseEnabled
     ? normalizeHeroSmsReuseEnabledValue(inputHeroSmsReuseEnabled.checked)
     : defaultHeroSmsReuseEnabled;
+  const freePhoneReuseEnabledValue = typeof inputFreePhoneReuseEnabled !== 'undefined' && inputFreePhoneReuseEnabled
+    ? Boolean(inputFreePhoneReuseEnabled.checked)
+    : Boolean(latestState?.freePhoneReuseEnabled);
   const normalizeHeroSmsAcquirePriorityValue = typeof normalizeHeroSmsAcquirePriority === 'function'
     ? normalizeHeroSmsAcquirePriority
     : (value) => (String(value || '').trim().toLowerCase() === 'price' ? 'price' : 'country');
@@ -2661,6 +2669,7 @@ function collectSettingsPayload() {
     ),
     heroSmsApiKey: heroSmsApiKeyValue,
     heroSmsReuseEnabled: heroSmsReuseEnabledValue,
+    freePhoneReuseEnabled: freePhoneReuseEnabledValue,
     heroSmsAcquirePriority: heroSmsAcquirePriorityValue,
     heroSmsMaxPrice: heroSmsMaxPriceValue,
     phoneVerificationReplacementLimit: phoneVerificationReplacementLimitValue,
@@ -3396,6 +3405,19 @@ function updateHeroSmsRuntimeDisplay(state = {}) {
     const code = String(state?.currentPhoneVerificationCode || '').trim();
     displayHeroSmsCurrentCode.textContent = code || '未获取';
   }
+  if (displayFreeReusablePhone) {
+    const activation = state?.freeReusablePhoneActivation || null;
+    const phoneNumber = String(activation?.phoneNumber || '').trim();
+    const activationId = String(activation?.activationId || '').trim();
+    const countryLabel = normalizeHeroSmsCountryLabel(
+      activation?.countryLabel || getHeroSmsCountryLabelById(activation?.countryId || '')
+    );
+    const recordedAt = Number(activation?.recordedAt) || 0;
+    const recordedText = recordedAt ? new Date(recordedAt).toLocaleString() : '';
+    displayFreeReusablePhone.textContent = phoneNumber
+      ? `${phoneNumber}${activationId ? ` (#${activationId})` : ''}${countryLabel ? ` / ${countryLabel}` : ''}${recordedText ? ` / ${recordedText}` : ''}`
+      : '未记录';
+  }
 }
 
 async function loadHeroSmsCountries() {
@@ -3695,6 +3717,8 @@ function updatePhoneVerificationSettingsUI() {
     typeof rowPhoneCodeTimeoutWindows !== 'undefined' ? rowPhoneCodeTimeoutWindows : null,
     typeof rowPhoneCodePollIntervalSeconds !== 'undefined' ? rowPhoneCodePollIntervalSeconds : null,
     typeof rowPhoneCodePollMaxRounds !== 'undefined' ? rowPhoneCodePollMaxRounds : null,
+    typeof rowFreePhoneReuseEnabled !== 'undefined' ? rowFreePhoneReuseEnabled : null,
+    typeof rowFreeReusablePhone !== 'undefined' ? rowFreeReusablePhone : null,
   ];
   phoneVerificationRows.forEach((row) => {
     if (!row) {
@@ -4229,6 +4253,9 @@ function applySettingsState(state) {
   }
   if (typeof inputHeroSmsReuseEnabled !== 'undefined' && inputHeroSmsReuseEnabled) {
     inputHeroSmsReuseEnabled.checked = normalizeHeroSmsReuseEnabledValue(state?.heroSmsReuseEnabled);
+  }
+  if (typeof inputFreePhoneReuseEnabled !== 'undefined' && inputFreePhoneReuseEnabled) {
+    inputFreePhoneReuseEnabled.checked = Boolean(state?.freePhoneReuseEnabled);
   }
   if (typeof selectHeroSmsAcquirePriority !== 'undefined' && selectHeroSmsAcquirePriority) {
     selectHeroSmsAcquirePriority.value = normalizeHeroSmsAcquirePriority(state?.heroSmsAcquirePriority);
@@ -7839,6 +7866,20 @@ inputHeroSmsReuseEnabled?.addEventListener('change', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputFreePhoneReuseEnabled?.addEventListener('change', () => {
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
+btnClearFreeReusablePhone?.addEventListener('click', async () => {
+  try {
+    await sendMessage({ type: 'CLEAR_FREE_REUSABLE_PHONE', source: 'sidepanel' });
+    showToast('已清除白嫖复用手机号', 'ok');
+  } catch (error) {
+    showToast(`清除失败：${error?.message || error}`, 'error');
+  }
+});
+
 selectHeroSmsAcquirePriority?.addEventListener('change', () => {
   selectHeroSmsAcquirePriority.value = normalizeHeroSmsAcquirePriority(selectHeroSmsAcquirePriority.value);
   markSettingsDirty(true);
@@ -8398,6 +8439,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.payload.heroSmsReuseEnabled !== undefined && inputHeroSmsReuseEnabled) {
         inputHeroSmsReuseEnabled.checked = normalizeHeroSmsReuseEnabledValue(message.payload.heroSmsReuseEnabled);
       }
+      if (message.payload.freePhoneReuseEnabled !== undefined && inputFreePhoneReuseEnabled) {
+        inputFreePhoneReuseEnabled.checked = Boolean(message.payload.freePhoneReuseEnabled);
+      }
       if (message.payload.heroSmsAcquirePriority !== undefined && selectHeroSmsAcquirePriority) {
         selectHeroSmsAcquirePriority.value = normalizeHeroSmsAcquirePriority(message.payload.heroSmsAcquirePriority);
       }
@@ -8470,6 +8514,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (
         message.payload.currentPhoneActivation !== undefined
         || message.payload.currentPhoneVerificationCode !== undefined
+        || message.payload.freeReusablePhoneActivation !== undefined
         || message.payload.heroSmsLastPriceTiers !== undefined
         || message.payload.heroSmsLastPriceCountryId !== undefined
         || message.payload.heroSmsLastPriceCountryLabel !== undefined

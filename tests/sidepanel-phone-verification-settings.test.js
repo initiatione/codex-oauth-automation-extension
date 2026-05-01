@@ -77,6 +77,14 @@ test('sidepanel html exposes phone verification toggle and dedicated HeroSMS row
   assert.match(html, /id="row-phone-code-timeout-windows"/);
   assert.match(html, /id="row-phone-code-poll-interval-seconds"/);
   assert.match(html, /id="row-phone-code-poll-max-rounds"/);
+  assert.match(html, /id="row-free-phone-reuse-enabled"/);
+  assert.match(html, /id="input-free-phone-reuse-enabled"/);
+  assert.match(html, /id="row-free-reusable-phone"/);
+  assert.match(html, /id="display-free-reusable-phone"/);
+  assert.match(html, /id="btn-clear-free-reusable-phone"/);
+  assert.match(html, /平台同号重激活/);
+  assert.match(html, /白嫖复用/);
+  assert.match(html, /白嫖号码/);
   assert.match(html, /id="row-oauth-flow-timeout"/);
   assert.match(html, /id="input-oauth-flow-timeout-enabled"/);
   assert.match(html, /只取消 Step 7 后链总预算/);
@@ -110,6 +118,8 @@ const rowPhoneCodeWaitSeconds = { style: { display: 'none' } };
 const rowPhoneCodeTimeoutWindows = { style: { display: 'none' } };
 const rowPhoneCodePollIntervalSeconds = { style: { display: 'none' } };
 const rowPhoneCodePollMaxRounds = { style: { display: 'none' } };
+const rowFreePhoneReuseEnabled = { style: { display: 'none' } };
+const rowFreeReusablePhone = { style: { display: 'none' } };
 
 ${extractFunction('updatePhoneVerificationSettingsUI')}
 
@@ -133,6 +143,8 @@ return {
   rowPhoneCodeTimeoutWindows,
   rowPhoneCodePollIntervalSeconds,
   rowPhoneCodePollMaxRounds,
+  rowFreePhoneReuseEnabled,
+  rowFreeReusablePhone,
   updatePhoneVerificationSettingsUI,
 };
 `)();
@@ -157,6 +169,8 @@ return {
   assert.equal(api.rowPhoneCodeTimeoutWindows.style.display, 'none');
   assert.equal(api.rowPhoneCodePollIntervalSeconds.style.display, 'none');
   assert.equal(api.rowPhoneCodePollMaxRounds.style.display, 'none');
+  assert.equal(api.rowFreePhoneReuseEnabled.style.display, 'none');
+  assert.equal(api.rowFreeReusablePhone.style.display, 'none');
 
   api.inputPhoneVerificationEnabled.checked = true;
   api.updatePhoneVerificationSettingsUI();
@@ -178,6 +192,8 @@ return {
   assert.equal(api.rowPhoneCodeTimeoutWindows.style.display, '');
   assert.equal(api.rowPhoneCodePollIntervalSeconds.style.display, '');
   assert.equal(api.rowPhoneCodePollMaxRounds.style.display, '');
+  assert.equal(api.rowFreePhoneReuseEnabled.style.display, '');
+  assert.equal(api.rowFreeReusablePhone.style.display, '');
 });
 
 test('collectSettingsPayload keeps local helper sync enabled while persisting sms toggle state', () => {
@@ -230,6 +246,7 @@ const inputPhoneVerificationEnabled = { checked: true };
 const inputVerificationResendCount = { value: '4' };
 const inputHeroSmsApiKey = { value: 'demo-key' };
 const inputHeroSmsReuseEnabled = { checked: true };
+const inputFreePhoneReuseEnabled = { checked: true };
 const selectHeroSmsAcquirePriority = { value: 'price' };
 const inputHeroSmsMaxPrice = { value: '0.12' };
 const inputPhoneReplacementLimit = { value: '5' };
@@ -308,6 +325,7 @@ return { collectSettingsPayload };
   assert.equal(payload.accountRunHistoryHelperBaseUrl, 'http://127.0.0.1:17373');
   assert.equal(payload.heroSmsApiKey, 'demo-key');
   assert.equal(payload.heroSmsReuseEnabled, true);
+  assert.equal(payload.freePhoneReuseEnabled, true);
   assert.equal(payload.heroSmsAcquirePriority, 'price');
   assert.equal(payload.heroSmsMaxPrice, '0.12');
   assert.equal(payload.phoneVerificationReplacementLimit, 5);

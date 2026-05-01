@@ -507,9 +507,9 @@
                     </div>
                   </div>
                   <div class="hero-sms-price-control hero-sms-price-control-reuse">
-                    <span class="hero-sms-settings-caption">号码复用</span>
+                    <span class="hero-sms-settings-caption">平台同号重激活</span>
                     <div class="setting-controls hero-sms-toggle-controls">
-                      <label class="toggle-switch hero-sms-price-reuse-toggle" for="input-hero-sms-reuse-enabled" title="开启后会优先复用未超次数的可用号码">
+                      <label class="toggle-switch hero-sms-price-reuse-toggle" for="input-hero-sms-reuse-enabled" title="开启后会调用 HeroSMS reactivate，可能再次计费">
                         <input type="checkbox" id="input-hero-sms-reuse-enabled" />
                         <span class="toggle-switch-track" aria-hidden="true">
                           <span class="toggle-switch-thumb"></span>
@@ -566,6 +566,17 @@
                     <span class="data-unit">次</span>
                   </div>
                 </div>
+                <div id="row-free-phone-reuse-enabled" class="hero-sms-settings-cell" style="display:none;">
+                  <span class="hero-sms-settings-caption">白嫖复用</span>
+                  <div class="setting-controls hero-sms-toggle-controls">
+                    <label class="toggle-switch" for="input-free-phone-reuse-enabled" title="开启后保存首个成功接码手机号；下次只填号码、不提交，并停止自动流程">
+                      <input type="checkbox" id="input-free-phone-reuse-enabled" />
+                      <span class="toggle-switch-track" aria-hidden="true">
+                        <span class="toggle-switch-thumb"></span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="data-row" id="row-hero-sms-runtime-pair" style="display:none;">
@@ -578,6 +589,11 @@
                 <div id="row-hero-sms-current-code" class="hero-sms-runtime-cell" style="display:none;">
                   <span class="hero-sms-runtime-key">验证码</span>
                   <span id="display-hero-sms-current-code" class="data-value mono hero-sms-runtime-value">未获取</span>
+                </div>
+                <div id="row-free-reusable-phone" class="hero-sms-runtime-cell" style="display:none;">
+                  <span class="hero-sms-runtime-key">白嫖号码</span>
+                  <span id="display-free-reusable-phone" class="data-value mono hero-sms-runtime-value">未记录</span>
+                  <button id="btn-clear-free-reusable-phone" class="btn btn-ghost btn-xs data-inline-btn" type="button">清除</button>
                 </div>
               </div>
             </div>

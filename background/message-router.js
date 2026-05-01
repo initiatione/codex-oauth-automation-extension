@@ -16,6 +16,7 @@
       clearAccountRunHistory,
       deleteAccountRunHistoryRecords,
       clearAutoRunTimerAlarm,
+      clearFreeReusablePhoneActivation,
       clearLuckmailRuntimeState,
       clearStopRequest,
       closeLocalhostCallbackTabs,
@@ -477,6 +478,13 @@
           await resetState();
           await addLog('流程已重置', 'info');
           return { ok: true };
+        }
+
+        case 'CLEAR_FREE_REUSABLE_PHONE': {
+          if (typeof clearFreeReusablePhoneActivation !== 'function') {
+            throw new Error('白嫖复用手机号清除能力未接入。');
+          }
+          return await clearFreeReusablePhoneActivation();
         }
 
         case 'SET_CONTRIBUTION_MODE': {

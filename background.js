@@ -501,6 +501,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   phoneCodeTimeoutWindows: DEFAULT_PHONE_CODE_TIMEOUT_WINDOWS,
   phoneCodePollIntervalSeconds: DEFAULT_PHONE_CODE_POLL_INTERVAL_SECONDS,
   phoneCodePollMaxRounds: DEFAULT_PHONE_CODE_POLL_ROUNDS,
+  freePhoneReuseEnabled: false,
   mailProvider: '163',
   mail2925Mode: DEFAULT_MAIL_2925_MODE,
   mail2925UseAccountPool: false,
@@ -551,7 +552,7 @@ const PERSISTED_SETTING_DEFAULTS = {
 const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
 const SETTINGS_EXPORT_SCHEMA_VERSION = 1;
 const SETTINGS_EXPORT_FILENAME_PREFIX = 'multipage-settings';
-const STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS = 25000;
+const STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS = 3000;
 const PRE_LOGIN_COOKIE_CLEAR_DOMAINS = [
   'chatgpt.com',
   'chat.openai.com',
@@ -635,6 +636,7 @@ const DEFAULT_STATE = {
   currentPhoneActivation: null,
   currentPhoneVerificationCode: '',
   reusablePhoneActivation: null,
+  freeReusablePhoneActivation: null,
   heroSmsLastPriceTiers: [],
   heroSmsLastPriceCountryId: 0,
   heroSmsLastPriceCountryLabel: '',
@@ -1470,6 +1472,7 @@ function normalizePersistentSettingValue(key, value) {
     case 'oauthFlowTimeoutEnabled':
     case 'autoRunDelayEnabled':
     case 'phoneVerificationEnabled':
+    case 'freePhoneReuseEnabled':
     case 'plusModeEnabled':
       return Boolean(value);
     case 'autoRunFallbackThreadIntervalMinutes':
@@ -2119,6 +2122,7 @@ async function resetState() {
       'tabRegistry',
       'sourceLastUrls',
       'reusablePhoneActivation',
+      'freeReusablePhoneActivation',
       'luckmailApiKey',
       'luckmailBaseUrl',
       'luckmailEmailType',
@@ -2152,6 +2156,19 @@ async function resetState() {
   )
     ? prev.reusablePhoneActivation
     : null;
+  const freeReusablePhoneActivation = (
+    prev.freeReusablePhoneActivation
+    && typeof prev.freeReusablePhoneActivation === 'object'
+    && !Array.isArray(prev.freeReusablePhoneActivation)
+    && String(
+      prev.freeReusablePhoneActivation.phoneNumber
+      ?? prev.freeReusablePhoneActivation.number
+      ?? prev.freeReusablePhoneActivation.phone
+      ?? ''
+    ).trim()
+  )
+    ? prev.freeReusablePhoneActivation
+    : null;
   await chrome.storage.session.clear();
   await chrome.storage.session.set({
     ...DEFAULT_STATE,
@@ -2174,6 +2191,8 @@ async function resetState() {
     currentLuckmailMailCursor: null,
     // Keep reusable phone activation across round resets so the same number can be reactivated up to maxUses.
     reusablePhoneActivation,
+    // Keep the free manual reuse phone record until the user clears it.
+    freeReusablePhoneActivation,
     preferredIcloudHost: prev.preferredIcloudHost || '',
   });
 }
@@ -5563,6 +5582,13 @@ async function finalizePhoneActivationAfterSuccessfulFlow(state) {
     return null;
   }
   return phoneVerificationHelpers.finalizePendingPhoneActivationConfirmation(state);
+}
+
+async function clearFreeReusablePhoneActivation() {
+  await setState({ freeReusablePhoneActivation: null });
+  broadcastDataUpdate({ freeReusablePhoneActivation: null });
+  await addLog('已清除白嫖复用手机号记录。', 'ok');
+  return { ok: true };
 }
 
 // ============================================================
@@ -9155,6 +9181,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   clearAccountRunHistory: (...args) => clearAndBroadcastAccountRunHistory(...args),
   deleteAccountRunHistoryRecords: (...args) => deleteAndBroadcastAccountRunHistoryRecords(...args),
   clearAutoRunTimerAlarm,
+  clearFreeReusablePhoneActivation,
   clearLuckmailRuntimeState,
   clearStopRequest,
   closeLocalhostCallbackTabs,

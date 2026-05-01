@@ -21,6 +21,7 @@ if (document.documentElement.getAttribute(SIGNUP_PAGE_LISTENER_SENTINEL) !== '1'
       || message.type === 'PREPARE_SIGNUP_VERIFICATION'
       || message.type === 'RECOVER_AUTH_RETRY_PAGE'
       || message.type === 'RESEND_VERIFICATION_CODE'
+      || message.type === 'FILL_PHONE_NUMBER_ONLY'
       || message.type === 'SUBMIT_PHONE_NUMBER'
       || message.type === 'SUBMIT_PHONE_VERIFICATION_CODE'
       || message.type === 'RESEND_PHONE_VERIFICATION_CODE'
@@ -81,6 +82,8 @@ async function handleCommand(message) {
       return await recoverCurrentAuthRetryPage(message.payload);
     case 'RESEND_VERIFICATION_CODE':
       return await resendVerificationCode(message.step);
+    case 'FILL_PHONE_NUMBER_ONLY':
+      return await phoneAuthHelpers.fillPhoneNumberOnly(message.payload);
     case 'SUBMIT_PHONE_NUMBER':
       return await phoneAuthHelpers.submitPhoneNumber(message.payload);
     case 'SUBMIT_PHONE_VERIFICATION_CODE':

@@ -15,3 +15,22 @@ test('message router module exposes a factory', () => {
 
   assert.equal(typeof api?.createMessageRouter, 'function');
 });
+
+test('message router clears saved free reusable phone record', async () => {
+  const source = fs.readFileSync('background/message-router.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundMessageRouter;`)(globalScope);
+  let clearCalls = 0;
+
+  const router = api.createMessageRouter({
+    clearFreeReusablePhoneActivation: async () => {
+      clearCalls += 1;
+      return { ok: true };
+    },
+  });
+
+  const result = await router.handleMessage({ type: 'CLEAR_FREE_REUSABLE_PHONE' }, {});
+
+  assert.deepStrictEqual(result, { ok: true });
+  assert.equal(clearCalls, 1);
+});

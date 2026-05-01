@@ -494,6 +494,56 @@
       return waitForPhoneVerificationReady();
     }
 
+    async function fillPhoneNumberOnly(payload = {}) {
+      const countryLabel = String(payload.countryLabel || '').trim();
+      if (!countryLabel) {
+        throw new Error('Missing country label for add-phone fill.');
+      }
+
+      await waitForAddPhoneReady();
+      const countrySelected = await ensureCountrySelected(countryLabel);
+      if (!countrySelected) {
+        throw new Error(`Failed to select "${countryLabel}" on the add-phone page.`);
+      }
+
+      const dialCode = getDisplayedDialCode();
+      if (!dialCode) {
+        throw new Error(`Could not determine the dial code for "${countryLabel}" on the add-phone page.`);
+      }
+
+      const phoneNumber = toE164PhoneNumber(payload.phoneNumber, dialCode);
+      const nationalPhoneNumber = toNationalPhoneNumber(payload.phoneNumber, dialCode);
+      if (!phoneNumber || !nationalPhoneNumber) {
+        throw new Error('Missing phone number for add-phone fill.');
+      }
+
+      const phoneInput = getPhoneInput() || await waitForElement(
+        'input[type="tel"], input[name="__reservedForPhoneNumberInput_tel"], input[autocomplete="tel"]',
+        10000
+      );
+      const hiddenPhoneNumberInput = getHiddenPhoneNumberInput();
+
+      if (!phoneInput) {
+        throw new Error('Add-phone page is missing the phone number input.');
+      }
+
+      await humanPause(250, 700);
+      fillInput(phoneInput, nationalPhoneNumber);
+      if (hiddenPhoneNumberInput) {
+        hiddenPhoneNumberInput.value = phoneNumber;
+        dispatchInputEvents(hiddenPhoneNumberInput);
+      }
+
+      return {
+        filled: true,
+        submitted: false,
+        phoneNumber,
+        nationalPhoneNumber,
+        countryLabel,
+        url: location.href,
+      };
+    }
+
     async function waitForPhoneVerificationOutcome(timeout = 30000) {
       const start = Date.now();
       while (Date.now() - start < timeout) {
@@ -623,6 +673,7 @@
 
     return {
       getPhoneVerificationDisplayedPhone,
+      fillPhoneNumberOnly,
       isPhoneVerificationPageReady,
       resendPhoneVerificationCode,
       returnToAddPhone,
