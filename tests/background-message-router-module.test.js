@@ -107,16 +107,25 @@ test('message router saves manual free reusable phone record', async () => {
 test('background manual free reusable phone save resolves country label without sidepanel helpers', async () => {
   const source = fs.readFileSync('background.js', 'utf8');
   const functionSource = extractFunction(source, 'setFreeReusablePhoneActivation');
+  const constantsSource = [
+    'HERO_SMS_COUNTRY_ID',
+    'HERO_SMS_COUNTRY_LABEL',
+    'HERO_SMS_SERVICE_CODE',
+    'DEFAULT_PHONE_NUMBER_MAX_USES',
+  ].map((name) => {
+    const match = source.match(new RegExp(`const\\s+${name}\\s*=\\s*[^;]+;`));
+    if (!match) {
+      throw new Error(`missing constant ${name}`);
+    }
+    return match[0];
+  }).join('\n');
   assert.doesNotMatch(functionSource, /getHeroSmsCountryLabelById/);
 
   const stateUpdates = [];
   const dataUpdates = [];
   const logs = [];
   const api = new Function('stateUpdates', 'dataUpdates', 'logs', `
-const HERO_SMS_COUNTRY_ID = 52;
-const HERO_SMS_COUNTRY_LABEL = 'Thailand';
-const HERO_SMS_SERVICE_CODE = 'dr';
-const DEFAULT_PHONE_NUMBER_MAX_USES = 3;
+${constantsSource}
 async function getState() {
   return {
     heroSmsCountryId: 6,
