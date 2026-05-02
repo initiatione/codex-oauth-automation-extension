@@ -70,6 +70,27 @@
       return String(value || '').trim().toLowerCase();
     }
 
+    async function reloadStep8RetryState(stickyLastResendAt = 0) {
+      const latestState = await getState();
+      const latestStateResendAt = Number(latestState?.loginVerificationRequestedAt) || 0;
+      const nextStickyLastResendAt = latestStateResendAt > 0
+        ? Math.max(stickyLastResendAt, latestStateResendAt)
+        : Math.max(0, stickyLastResendAt);
+      if (nextStickyLastResendAt > 0 && (!latestStateResendAt || latestStateResendAt < nextStickyLastResendAt)) {
+        return {
+          stickyLastResendAt: nextStickyLastResendAt,
+          state: {
+            ...latestState,
+            loginVerificationRequestedAt: nextStickyLastResendAt,
+          },
+        };
+      }
+      return {
+        stickyLastResendAt: nextStickyLastResendAt,
+        state: latestState,
+      };
+    }
+
     async function completeStep8WhenAuthAlreadyOnOauthConsent(visibleStep, options = {}) {
       await setState({
         step8VerificationTargetEmail: '',
@@ -216,15 +237,25 @@
         return;
       }
       const shouldCompareVerificationEmail = mail.provider !== '2925';
+      const retainedVerificationTargetEmail = shouldCompareVerificationEmail
+        ? normalizeStep8VerificationTargetEmail(state?.step8VerificationTargetEmail)
+        : '';
       const displayedVerificationEmail = shouldCompareVerificationEmail
         ? normalizeStep8VerificationTargetEmail(pageState?.displayedEmail)
         : '';
       const fixedTargetEmail = shouldCompareVerificationEmail
-        ? (displayedVerificationEmail || normalizeStep8VerificationTargetEmail(state?.email))
+        ? (
+          retainedVerificationTargetEmail
+          || displayedVerificationEmail
+          || normalizeStep8VerificationTargetEmail(state?.email)
+        )
+        : '';
+      const persistedVerificationTargetEmail = shouldCompareVerificationEmail
+        ? (retainedVerificationTargetEmail || displayedVerificationEmail || '')
         : '';
 
       await setState({
-        step8VerificationTargetEmail: displayedVerificationEmail || '',
+        step8VerificationTargetEmail: persistedVerificationTargetEmail,
       });
 
       await addLog(`步骤 ${visibleStep}：登录验证码页面已就绪，开始获取验证码。`, 'info');
@@ -276,7 +307,7 @@
 
       await resolveVerificationStep(8, {
         ...state,
-        step8VerificationTargetEmail: displayedVerificationEmail || '',
+        step8VerificationTargetEmail: persistedVerificationTargetEmail,
       }, mail, {
         completionStep: visibleStep,
         filterAfterTimestamp: verificationFilterAfterTimestamp,
@@ -311,6 +342,29 @@
       return /STEP8_RESTART_STEP7::/i.test(message);
     }
 
+    async function classifyStep8AttemptFailure(currentState, currentError, visibleStep) {
+      if (isStep8AddPhoneStateError(currentError)) {
+        throw currentError;
+      }
+
+      if (!isVerificationMailPollingError(currentError) && !isStep8RestartStep7Error(currentError)) {
+        throw currentError;
+      }
+
+      if (isStep8RestartStep7Error(currentError)) {
+        return { outcome: 'restart_step7', error: currentError };
+      }
+
+      const recovery = await recoverStep8PollingFailure(currentState, visibleStep);
+      if (recovery?.outcome === 'completed') {
+        return { outcome: 'completed' };
+      }
+      if (recovery?.outcome === 'retry_without_step7') {
+        return { outcome: 'retry_same_chain', error: recovery?.error || currentError };
+      }
+      return { outcome: 'restart_step7', error: recovery?.error || currentError };
+    }
+
     async function executeStep8(state) {
       let currentState = state;
       let mailPollingAttempt = 1;
@@ -335,48 +389,25 @@
         } catch (err) {
           const visibleStep = getVisibleStep(currentState, 8);
           const authLoginStep = getAuthLoginStepForVisibleStep(visibleStep);
-          let currentError = err;
-          let retryWithoutStep7 = false;
-          const isMailPollingError = isVerificationMailPollingError(err);
-          if (isMailPollingError && !isStep8RestartStep7Error(err)) {
-            const recovery = await recoverStep8PollingFailure(currentState, visibleStep);
-            if (recovery?.outcome === 'completed') {
-              return;
-            }
-            if (recovery?.outcome === 'retry_without_step7') {
-              retryWithoutStep7 = true;
-            }
-            if (recovery?.error) {
-              currentError = recovery.error;
-            }
-          }
-          if (!isVerificationMailPollingError(currentError) && !isStep8RestartStep7Error(currentError)) {
-            throw currentError;
+          const failure = await classifyStep8AttemptFailure(currentState, err, visibleStep);
+          if (failure?.outcome === 'completed') {
+            return;
           }
 
-          lastMailPollingError = currentError;
+          lastMailPollingError = failure?.error || err;
           if (mailPollingAttempt >= STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS) {
             break;
           }
 
           mailPollingAttempt += 1;
-          if (retryWithoutStep7) {
+          if (failure?.outcome === 'retry_same_chain') {
             await addLog(
               `步骤 ${visibleStep}：认证页仍保持在验证码页，将在当前链路直接重试（${mailPollingAttempt}/${STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS}），不回到步骤 ${authLoginStep}。`,
               'warn'
             );
-            const latestState = await getState();
-            const latestStateResendAt = Number(latestState?.loginVerificationRequestedAt) || 0;
-            if (latestStateResendAt > 0) {
-              stickyLastResendAt = Math.max(stickyLastResendAt, latestStateResendAt);
-            }
-            currentState = latestState;
-            if (stickyLastResendAt > 0 && (!latestStateResendAt || latestStateResendAt < stickyLastResendAt)) {
-              currentState = {
-                ...latestState,
-                loginVerificationRequestedAt: stickyLastResendAt,
-              };
-            }
+            const retryState = await reloadStep8RetryState(stickyLastResendAt);
+            stickyLastResendAt = retryState.stickyLastResendAt;
+            currentState = retryState.state;
             const resendIntervalMs = getStep8ResendIntervalMs(currentState);
             const remainingBeforeRetryMs = stickyLastResendAt > 0 && resendIntervalMs > 0
               ? Math.max(0, resendIntervalMs - (Date.now() - stickyLastResendAt))
@@ -391,13 +422,13 @@
             continue;
           }
           await addLog(
-            isStep8RestartStep7Error(currentError)
+            isStep8RestartStep7Error(lastMailPollingError)
               ? `步骤 ${visibleStep}：检测到认证页进入重试/超时报错状态，准备从步骤 ${authLoginStep} 重新开始（${mailPollingAttempt}/${STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS}）...`
               : `步骤 ${visibleStep}：检测到邮箱轮询类失败，准备从步骤 ${authLoginStep} 重新开始（${mailPollingAttempt}/${STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS}）...`,
             'warn'
           );
           await rerunStep7ForStep8Recovery({
-            logMessage: isStep8RestartStep7Error(currentError)
+            logMessage: isStep8RestartStep7Error(lastMailPollingError)
               ? `步骤 ${visibleStep}：认证页进入重试/超时报错状态，正在回到步骤 ${authLoginStep} 重新发起登录流程...`
               : `步骤 ${visibleStep}：正在回到步骤 ${authLoginStep}，重新发起登录验证码流程...`,
           });

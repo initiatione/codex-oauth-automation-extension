@@ -27,10 +27,10 @@ test('step 6 runs cookie cleanup and completes from background', async () => {
   assert.deepStrictEqual(events.completedSteps, [6]);
 });
 
-test('step 6 pre-login cookie cleanup waits exactly three seconds', () => {
+test('step 6 pre-login cookie cleanup waits exactly ten seconds', () => {
   const source = fs.readFileSync('background.js', 'utf8');
 
-  assert.match(source, /const STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS = 3000;/);
+  assert.match(source, /const STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS = 10000;/);
   assert.match(source, /await sleepWithStop\(STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS\);/);
   assert.match(source, /开始前等待 \$\{Math\.round\(STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS \/ 1000\)\} 秒/);
 });

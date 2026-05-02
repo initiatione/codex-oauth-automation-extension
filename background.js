@@ -556,7 +556,7 @@ const PERSISTED_SETTING_DEFAULTS = {
 const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
 const SETTINGS_EXPORT_SCHEMA_VERSION = 1;
 const SETTINGS_EXPORT_FILENAME_PREFIX = 'multipage-settings';
-const STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS = 3000;
+const STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS = 10000;
 const PRE_LOGIN_COOKIE_CLEAR_DOMAINS = [
   'chatgpt.com',
   'chat.openai.com',
@@ -10841,6 +10841,7 @@ const step9Executor = self.MultiPageBackgroundStep9?.createStep9Executor({
   getWebNavCommittedListener,
   getWebNavListener,
   getStep8TabUpdatedListener,
+  invalidateStep9PhoneFlow,
   isTabAlive,
   prepareStep8DebuggerClick,
   recoverOAuthLocalhostTimeout,

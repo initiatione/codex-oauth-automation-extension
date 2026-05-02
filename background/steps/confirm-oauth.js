@@ -15,6 +15,7 @@
       getStep8CallbackUrlFromTabUpdate,
       getStep8EffectLabel,
       getTabId,
+      invalidateStep9PhoneFlow,
       isTabAlive,
       prepareStep8DebuggerClick,
       recoverOAuthLocalhostTimeout,
@@ -96,9 +97,12 @@
 
       return new Promise((resolve, reject) => {
         let resolved = false;
+        let finalizingCallback = false;
         let signupTabId = null;
         const callbackWaitStartedAt = Date.now();
         let timeoutCheckTimer = null;
+        let phoneFlowInvalidated = false;
+        const isSettledOrFinalizing = () => resolved || finalizingCallback;
 
         const cleanupListener = () => {
           if (timeoutCheckTimer) {
@@ -109,30 +113,45 @@
           setStep8PendingReject(null);
         };
 
+        const invalidatePhoneFlowOnFailure = () => {
+          if (phoneFlowInvalidated || !phoneFlowToken || typeof invalidateStep9PhoneFlow !== 'function') {
+            return;
+          }
+          phoneFlowInvalidated = true;
+          invalidateStep9PhoneFlow('step9 terminal failure');
+        };
+
         const rejectStep9 = (error) => {
           if (resolved) return;
           resolved = true;
+          finalizingCallback = false;
+          invalidatePhoneFlowOnFailure();
           cleanupListener();
           reject(error);
         };
 
         const finalizeStep9Callback = (callbackUrl) => {
-          if (resolved || !callbackUrl) return;
+          if (isSettledOrFinalizing() || !callbackUrl) return;
 
-          resolved = true;
+          finalizingCallback = true;
           cleanupListener();
 
           addLog(`步骤 ${visibleStep}：已捕获 localhost 地址：${callbackUrl}`, 'ok').then(() => {
             return completeStepFromBackground(visibleStep, { localhostUrl: callbackUrl });
           }).then(() => {
+            if (resolved) {
+              return;
+            }
+            resolved = true;
+            finalizingCallback = false;
             resolve();
           }).catch((err) => {
-            reject(err);
+            rejectStep9(err);
           });
         };
 
         const checkCallbackTimeout = async () => {
-          if (resolved) {
+          if (isSettledOrFinalizing()) {
             return;
           }
           const elapsedMs = Date.now() - callbackWaitStartedAt;
@@ -186,9 +205,9 @@
 
         (async () => {
           try {
-            throwIfStep8SettledOrStopped(resolved);
+            throwIfStep8SettledOrStopped(isSettledOrFinalizing());
             signupTabId = await getTabId('signup-page');
-            throwIfStep8SettledOrStopped(resolved);
+            throwIfStep8SettledOrStopped(isSettledOrFinalizing());
 
             if (signupTabId && await isTabAlive('signup-page')) {
               await chrome.tabs.update(signupTabId, { active: true });
@@ -198,7 +217,7 @@
               await addLog(`步骤 ${visibleStep}：已重新打开认证页，正在准备调试器点击...`);
             }
 
-            throwIfStep8SettledOrStopped(resolved);
+            throwIfStep8SettledOrStopped(isSettledOrFinalizing());
             chrome.webNavigation.onBeforeNavigate.addListener(deps.getWebNavListener());
             chrome.webNavigation.onCommitted.addListener(deps.getWebNavCommittedListener());
             chrome.tabs.onUpdated.addListener(deps.getStep8TabUpdatedListener());
@@ -212,8 +231,8 @@
               logMessage: `步骤 ${visibleStep}：认证页内容脚本尚未就绪，正在等待页面恢复...`,
             });
 
-            for (let round = 1; round <= STEP8_MAX_ROUNDS && !resolved; round++) {
-              throwIfStep8SettledOrStopped(resolved);
+            for (let round = 1; round <= STEP8_MAX_ROUNDS && !isSettledOrFinalizing(); round++) {
+              throwIfStep8SettledOrStopped(isSettledOrFinalizing());
               const pageState = await waitForStep8Ready(
                 signupTabId,
                 typeof getOAuthFlowStepTimeoutMs === 'function'
@@ -244,7 +263,7 @@
                   timeoutMs: clickActionTimeoutMs,
                   responseTimeoutMs: clickActionTimeoutMs,
                 });
-                throwIfStep8SettledOrStopped(resolved);
+                throwIfStep8SettledOrStopped(isSettledOrFinalizing());
                 await clickWithDebugger(signupTabId, clickTarget?.rect);
               } else {
                 const clickActionTimeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
@@ -259,7 +278,7 @@
                 });
               }
 
-              if (resolved) {
+              if (isSettledOrFinalizing()) {
                 return;
               }
 
@@ -273,7 +292,7 @@
                   })
                   : 15000
               );
-              if (resolved) {
+              if (isSettledOrFinalizing()) {
                 return;
               }
 
