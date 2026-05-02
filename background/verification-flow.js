@@ -37,6 +37,7 @@
       : ((error) => /back\/forward cache|message channel is closed|Receiving end does not exist|port closed before a response was received|A listener indicated an asynchronous response|did not respond in \d+s/i.test(
         String(typeof error === 'string' ? error : error?.message || '')
       ));
+    const ICLOUD_VERIFICATION_RESULT_STORAGE_KEY = 'icloudVerificationResultState';
 
     function getVerificationCodeStateKey(step) {
       return step === 4 ? 'lastSignupCode' : 'lastLoginCode';
@@ -44,6 +45,60 @@
 
     function getVerificationCodeLabel(step) {
       return step === 4 ? '注册' : '登录';
+    }
+
+    function buildIcloudVerificationSessionKey(step, details = {}) {
+      const explicitSessionKey = String(details?.sessionKey || '').trim();
+      if (explicitSessionKey) {
+        return explicitSessionKey;
+      }
+      const timestamp = Number(details?.filterAfterTimestamp);
+      if (Number.isFinite(timestamp) && timestamp > 0) {
+        return `${step}:${timestamp}`;
+      }
+      return `${step}:default`;
+    }
+
+    function normalizeIcloudVerificationResultState(value) {
+      if (!value || typeof value !== 'object') {
+        return null;
+      }
+      const sessionKey = String(value.sessionKey || '').trim();
+      const code = String(value.code || '').trim();
+      if (!sessionKey || !code) {
+        return null;
+      }
+      return {
+        sessionKey,
+        code,
+      };
+    }
+
+    async function clearIcloudVerificationResultCacheForSession(step, details = {}) {
+      if (!chrome?.storage?.session) {
+        return;
+      }
+
+      const expectedSessionKey = buildIcloudVerificationSessionKey(step, details);
+      if (!expectedSessionKey) {
+        return;
+      }
+
+      try {
+        const data = await chrome.storage.session.get(ICLOUD_VERIFICATION_RESULT_STORAGE_KEY);
+        const cachedState = normalizeIcloudVerificationResultState(data?.[ICLOUD_VERIFICATION_RESULT_STORAGE_KEY]);
+        if (!cachedState || cachedState.sessionKey !== expectedSessionKey) {
+          return;
+        }
+
+        if (typeof chrome.storage.session.remove === 'function') {
+          await chrome.storage.session.remove(ICLOUD_VERIFICATION_RESULT_STORAGE_KEY);
+        } else {
+          await chrome.storage.session.set({ [ICLOUD_VERIFICATION_RESULT_STORAGE_KEY]: null });
+        }
+      } catch {
+        // Best-effort cleanup only.
+      }
     }
 
     function isLikelyLoggedInChatgptHomeUrl(rawUrl) {
@@ -1072,6 +1127,7 @@
             resendIntervalMs,
             lastResendAt,
             onResendRequestedAt: updateFilterAfterTimestampForVerificationStep,
+            sessionKey: options.sessionKey,
           };
           if (nextFilterAfterTimestamp !== null && nextFilterAfterTimestamp !== undefined) {
             pollOptions.filterAfterTimestamp = nextFilterAfterTimestamp;
@@ -1085,7 +1141,14 @@
 
           throwIfStopped();
           const normalizedCode = String(result?.code || '').trim();
+          const icloudSessionDetails = {
+            sessionKey: result?.sessionKey || options.sessionKey,
+            filterAfterTimestamp: nextFilterAfterTimestamp ?? options.filterAfterTimestamp,
+          };
           if (rejectedCodes.has(normalizedCode)) {
+            if (mail?.source === 'icloud-mail') {
+              await clearIcloudVerificationResultCacheForSession(step, icloudSessionDetails);
+            }
             await addLog(
               `步骤 ${step}：忽略已被页面拒绝的${getVerificationCodeLabel(step)}验证码：${normalizedCode}，继续等待新验证码。`,
               'warn'
@@ -1105,10 +1168,16 @@
               lastResendAt,
             });
           }
+          if (mail?.source === 'icloud-mail') {
+            await clearIcloudVerificationResultCacheForSession(step, icloudSessionDetails);
+          }
           throwIfStopped();
           const submitResult = await submitVerificationCode(step, result.code, options);
 
           if (submitResult.invalidCode) {
+            if (mail?.source === 'icloud-mail') {
+              await clearIcloudVerificationResultCacheForSession(step, icloudSessionDetails);
+            }
             rejectedCodes.add(normalizedCode);
             await addLog(`步骤 ${step}：验证码被页面拒绝：${submitResult.errorText || result.code}`, 'warn');
 

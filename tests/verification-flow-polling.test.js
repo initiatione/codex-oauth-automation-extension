@@ -565,6 +565,212 @@ test('verification flow submits an iCloud fast-path step 8 code without requesti
   ]);
 });
 
+test('verification flow submits a recovered cached iCloud step 8 code without requesting resend and clears the cache', async () => {
+  const events = [];
+  let cachedState = {
+    sessionKey: '8:123456',
+    step: 8,
+    code: '654321',
+    emailTimestamp: 123,
+    preview: 'cached preview',
+    cachedAt: 999,
+  };
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: {
+      storage: {
+        session: {
+          async get(key) {
+            return { [key]: cachedState };
+          },
+          async remove() {
+            cachedState = null;
+          },
+          async set(payload) {
+            cachedState = payload.icloudVerificationResultState || null;
+          },
+        },
+      },
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async (_step, payload) => {
+      events.push(['complete', payload.code]);
+    },
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async (_source, message) => {
+      events.push([message.type, message.payload?.code || '']);
+      if (message.type === 'RESEND_VERIFICATION_CODE') {
+        throw new Error('should not request resend after recovered iCloud code');
+      }
+      return {};
+    },
+    sendToMailContentScriptResilient: async (mail, message) => {
+      events.push(['mail', mail.source, message.type, Boolean(message.payload?.sessionKey)]);
+      return {
+        code: '654321',
+        emailTimestamp: 123,
+        sessionKey: '8:123456',
+        transportRecovered: true,
+      };
+    },
+    setState: async (payload) => {
+      events.push(['state', payload.lastLoginCode || payload.lastSignupCode]);
+    },
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  await helpers.resolveVerificationStep(
+    8,
+    {
+      email: 'user@example.com',
+      lastLoginCode: null,
+    },
+    {
+      provider: 'icloud',
+      source: 'icloud-mail',
+      label: 'iCloud 邮箱',
+    },
+    {
+      filterAfterTimestamp: 123456,
+      requestFreshCodeFirst: false,
+      maxResendRequests: 1,
+      resendIntervalMs: 25000,
+      sessionKey: '8:123456',
+    }
+  );
+
+  assert.equal(cachedState, null);
+  assert.deepStrictEqual(events, [
+    ['mail', 'icloud-mail', 'POLL_EMAIL', true],
+    ['FILL_CODE', '654321'],
+    ['state', '654321'],
+    ['complete', '654321'],
+  ]);
+});
+
+test('verification flow clears a recovered cached iCloud result before retrying after invalid code', async () => {
+  const submittedCodes = [];
+  let cachedState = {
+    sessionKey: '8:123456',
+    step: 8,
+    code: '654321',
+    emailTimestamp: 123,
+    preview: 'cached preview',
+    cachedAt: 999,
+  };
+  let pollCalls = 0;
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: {
+      storage: {
+        session: {
+          async get(key) {
+            return { [key]: cachedState };
+          },
+          async remove() {
+            cachedState = null;
+          },
+          async set(payload) {
+            cachedState = payload.icloudVerificationResultState || null;
+          },
+        },
+      },
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async () => {},
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async (_source, message) => {
+      if (message.type === 'FILL_CODE') {
+        submittedCodes.push(message.payload.code);
+        return submittedCodes.length === 1
+          ? { invalidCode: true, errorText: '旧验证码' }
+          : {};
+      }
+      return {};
+    },
+    sendToMailContentScriptResilient: async () => {
+      pollCalls += 1;
+      if (pollCalls === 2) {
+        assert.equal(cachedState, null, 'expected recovered cache to be cleared before retry polling');
+      }
+      return pollCalls === 1
+        ? {
+          code: '654321',
+          emailTimestamp: 123,
+          sessionKey: '8:123456',
+          transportRecovered: true,
+        }
+        : {
+          code: '777888',
+          emailTimestamp: 124,
+          sessionKey: '8:123456',
+        };
+    },
+    setState: async () => {},
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  await helpers.resolveVerificationStep(
+    8,
+    {
+      email: 'user@example.com',
+      lastLoginCode: null,
+    },
+    {
+      provider: 'icloud',
+      source: 'icloud-mail',
+      label: 'iCloud 邮箱',
+    },
+    {
+      filterAfterTimestamp: 123456,
+      requestFreshCodeFirst: false,
+      maxResendRequests: 0,
+      resendIntervalMs: 0,
+      sessionKey: '8:123456',
+    }
+  );
+
+  assert.deepStrictEqual(submittedCodes, ['654321', '777888']);
+});
+
 test('verification flow keeps step 8 successful when code submit transport fails but auth page already reaches oauth consent', async () => {
   const events = [];
 

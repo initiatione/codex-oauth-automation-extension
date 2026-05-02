@@ -1807,6 +1807,18 @@ async function getState() {
   return { ...DEFAULT_STATE, ...persistedSettings, ...persistedAliasState, ...state, accountRunHistory };
 }
 
+async function clearIcloudVerificationResultSessionState() {
+  try {
+    if (typeof chrome.storage?.session?.remove === 'function') {
+      await chrome.storage.session.remove('icloudVerificationResultState');
+    } else if (chrome.storage?.session?.set) {
+      await chrome.storage.session.set({ icloudVerificationResultState: null });
+    }
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
 async function initializeSessionStorageAccess() {
   try {
     if (chrome.storage?.session?.setAccessLevel) {
@@ -2214,6 +2226,9 @@ async function resetState() {
   console.log(LOG_PREFIX, 'Resetting all state');
   if (typeof invalidateStep9PhoneFlow === 'function') {
     invalidateStep9PhoneFlow('resetState');
+  }
+  if (typeof clearIcloudVerificationResultSessionState === 'function') {
+    await clearIcloudVerificationResultSessionState();
   }
   // Preserve settings and persistent data across resets
   const [prev, persistedSettings, persistedAliasState] = await Promise.all([
@@ -7847,6 +7862,9 @@ async function requestStop(options = {}) {
   clearCurrentAutoRunSessionId();
   cancelPendingCommands();
   abortActiveIcloudRequests();
+  if (typeof clearIcloudVerificationResultSessionState === 'function') {
+    await clearIcloudVerificationResultSessionState();
+  }
   cleanupStep8NavigationListeners();
   rejectPendingStep8(new Error(STOP_ERROR_MESSAGE));
 

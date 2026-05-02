@@ -270,6 +270,112 @@ test('tab runtime gives recovered iCloud POLL_EMAIL attempts a practical respons
   assert.deepStrictEqual(timeoutCalls.filter((ms) => ms === 1000 || ms === 10000), [1000, 10000]);
 });
 
+test('tab runtime recovers a cached iCloud POLL_EMAIL success before warning or reload escalation', async () => {
+  const source = fs.readFileSync('background/tab-runtime.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundTabRuntime;`)(globalScope);
+
+  const logs = [];
+  let sendCalls = 0;
+  let removed = false;
+  let createCalls = 0;
+  let updateCalls = 0;
+  const runtime = api.createTabRuntime({
+    LOG_PREFIX: '[test]',
+    addLog: async (message, level) => {
+      logs.push({ message, level });
+    },
+    chrome: {
+      scripting: {
+        executeScript: async () => {},
+      },
+      storage: {
+        session: {
+          async get(key) {
+            return {
+              [key]: {
+                sessionKey: '8:123456',
+                step: 8,
+                code: '654321',
+                emailTimestamp: 123,
+                preview: 'cached preview',
+                cachedAt: 999,
+              },
+            };
+          },
+          async remove() {
+            removed = true;
+          },
+        },
+      },
+      tabs: {
+        create: async () => {
+          createCalls += 1;
+          return { id: 2, url: 'https://www.icloud.com/mail/', status: 'complete' };
+        },
+        get: async () => ({ id: 1, url: 'https://www.icloud.com/mail/', status: 'complete' }),
+        onUpdated: {
+          addListener: () => {},
+          removeListener: () => {},
+        },
+        query: async () => [],
+        reload: async () => {},
+        sendMessage: async () => {
+          sendCalls += 1;
+          throw new Error('Content script on icloud-mail did not respond in 1s. Try refreshing the tab and retry.');
+        },
+        update: async () => {
+          updateCalls += 1;
+          return { id: 1, url: 'https://www.icloud.com/mail/', status: 'complete' };
+        },
+      },
+    },
+    getSourceLabel: (sourceName) => sourceName || 'unknown',
+    getState: async () => ({
+      tabRegistry: { 'icloud-mail': { tabId: 1, ready: true } },
+      sourceLastUrls: {},
+    }),
+    isRetryableContentScriptTransportError: (error) => /did not respond/i.test(String(error?.message || error)),
+    matchesSourceUrlFamily: () => false,
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const result = await runtime.sendToMailContentScriptResilient(
+    {
+      source: 'icloud-mail',
+      label: 'iCloud 邮箱',
+      url: 'https://www.icloud.com/mail/',
+    },
+    {
+      type: 'POLL_EMAIL',
+      step: 8,
+      source: 'background',
+      payload: { sessionKey: '8:123456', maxAttempts: 1, intervalMs: 3000 },
+    },
+    {
+      timeoutMs: 20000,
+      responseTimeoutMs: 1000,
+      maxRecoveryAttempts: 1,
+    }
+  );
+
+  assert.deepStrictEqual(result, {
+    ok: true,
+    code: '654321',
+    emailTimestamp: 123,
+    preview: 'cached preview',
+    sessionKey: '8:123456',
+    transportRecovered: true,
+  });
+  assert.equal(sendCalls, 1);
+  assert.equal(removed, true);
+  assert.equal(createCalls, 0);
+  assert.equal(updateCalls, 0);
+  assert.deepStrictEqual(logs, []);
+});
+
 test('tab runtime keeps non-iCloud recovered POLL_EMAIL response timeouts unchanged', async () => {
   const source = fs.readFileSync('background/tab-runtime.js', 'utf8');
   const globalScope = {};

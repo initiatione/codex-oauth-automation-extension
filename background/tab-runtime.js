@@ -19,6 +19,7 @@
 
     const pendingCommands = new Map();
     const ICLOUD_POLL_EMAIL_RECOVERY_RESPONSE_TIMEOUT_MS = 10000;
+    const ICLOUD_VERIFICATION_RESULT_STORAGE_KEY = 'icloudVerificationResultState';
 
     async function sleepOrStop(ms) {
       if (typeof sleepWithStop === 'function') {
@@ -450,6 +451,92 @@
       return 0;
     }
 
+    function buildIcloudVerificationSessionKey(step, payload = {}) {
+      const explicitSessionKey = String(payload?.sessionKey || '').trim();
+      if (explicitSessionKey) {
+        return explicitSessionKey;
+      }
+      const timestamp = Number(payload?.filterAfterTimestamp);
+      if (Number.isFinite(timestamp) && timestamp > 0) {
+        return `${step}:${timestamp}`;
+      }
+      return `${step}:default`;
+    }
+
+    function normalizeIcloudVerificationResultState(value) {
+      if (!value || typeof value !== 'object') {
+        return null;
+      }
+      const sessionKey = String(value.sessionKey || '').trim();
+      const code = String(value.code || '').trim();
+      if (!sessionKey || !code) {
+        return null;
+      }
+      return {
+        sessionKey,
+        step: Math.max(0, Number(value.step) || 0),
+        code,
+        emailTimestamp: Number.isFinite(Number(value.emailTimestamp))
+          ? Number(value.emailTimestamp)
+          : 0,
+        preview: String(value.preview || ''),
+        cachedAt: Number.isFinite(Number(value.cachedAt))
+          ? Number(value.cachedAt)
+          : 0,
+      };
+    }
+
+    async function readIcloudVerificationResultState() {
+      const sessionStorage = chrome?.storage?.session;
+      if (!sessionStorage || typeof sessionStorage.get !== 'function') {
+        return null;
+      }
+      try {
+        const data = await sessionStorage.get(ICLOUD_VERIFICATION_RESULT_STORAGE_KEY);
+        return normalizeIcloudVerificationResultState(data?.[ICLOUD_VERIFICATION_RESULT_STORAGE_KEY]);
+      } catch {
+        return null;
+      }
+    }
+
+    async function clearIcloudVerificationResultState() {
+      const sessionStorage = chrome?.storage?.session;
+      if (!sessionStorage) {
+        return;
+      }
+      try {
+        if (typeof sessionStorage.remove === 'function') {
+          await sessionStorage.remove(ICLOUD_VERIFICATION_RESULT_STORAGE_KEY);
+        } else if (typeof sessionStorage.set === 'function') {
+          await sessionStorage.set({ [ICLOUD_VERIFICATION_RESULT_STORAGE_KEY]: null });
+        }
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
+
+    async function takeRecoveredIcloudVerificationResult(mail, message) {
+      if (mail?.source !== 'icloud-mail' || message?.type !== 'POLL_EMAIL') {
+        return null;
+      }
+
+      const expectedSessionKey = buildIcloudVerificationSessionKey(message.step, message.payload || {});
+      const cachedState = await readIcloudVerificationResultState();
+      if (!cachedState || cachedState.sessionKey !== expectedSessionKey) {
+        return null;
+      }
+
+      await clearIcloudVerificationResultState();
+      return {
+        ok: true,
+        code: cachedState.code,
+        emailTimestamp: cachedState.emailTimestamp || Date.now(),
+        preview: cachedState.preview || '',
+        sessionKey: cachedState.sessionKey,
+        transportRecovered: true,
+      };
+    }
+
     function getMessageDebugLabel(source, message, tabId = null) {
       const parts = [source || 'unknown', message?.type || 'UNKNOWN'];
       if (Number.isInteger(message?.step)) parts.push(`step=${message.step}`);
@@ -736,6 +823,11 @@
         } catch (err) {
           if (!isRetryableContentScriptTransportError(err)) {
             throw err;
+          }
+
+          const recoveredResult = await takeRecoveredIcloudVerificationResult(mail, message);
+          if (recoveredResult) {
+            return recoveredResult;
           }
 
           lastError = err;

@@ -39,6 +39,145 @@ if (isTopFrame) {
     return String(value || '').replace(/\s+/g, ' ').trim();
   }
 
+  function getIcloudVerificationResultStorageKey() {
+    return 'icloudVerificationResultState';
+  }
+
+  let cachedVerificationResultState = null;
+  let cachedVerificationResultReadyPromise = null;
+
+  function buildVerificationSessionKey(step, payload = {}) {
+    const explicitSessionKey = String(payload?.sessionKey || '').trim();
+    if (explicitSessionKey) {
+      return explicitSessionKey;
+    }
+    const timestamp = Number(payload?.filterAfterTimestamp);
+    if (Number.isFinite(timestamp) && timestamp > 0) {
+      return `${step}:${timestamp}`;
+    }
+    return `${step}:default`;
+  }
+
+  function normalizeCachedVerificationResultState(value) {
+    if (!value || typeof value !== 'object') {
+      return null;
+    }
+    const sessionKey = String(value.sessionKey || '').trim();
+    const code = String(value.code || '').trim();
+    if (!sessionKey || !code) {
+      return null;
+    }
+    return {
+      sessionKey,
+      step: Math.max(0, Number(value.step) || 0),
+      code,
+      emailTimestamp: Number.isFinite(Number(value.emailTimestamp))
+        ? Number(value.emailTimestamp)
+        : 0,
+      preview: String(value.preview || ''),
+      cachedAt: Number.isFinite(Number(value.cachedAt))
+        ? Number(value.cachedAt)
+        : 0,
+    };
+  }
+
+  async function loadCachedVerificationResultState() {
+    try {
+      const data = await chrome.storage.session.get(getIcloudVerificationResultStorageKey());
+      cachedVerificationResultState = normalizeCachedVerificationResultState(
+        data?.[getIcloudVerificationResultStorageKey()]
+      );
+    } catch (err) {
+      cachedVerificationResultState = null;
+      console.warn(ICLOUD_MAIL_PREFIX, 'Session storage unavailable, using in-memory verification result cache:', err?.message || err);
+    }
+  }
+
+  cachedVerificationResultReadyPromise = loadCachedVerificationResultState();
+
+  async function persistCachedVerificationResultState(nextState) {
+    cachedVerificationResultState = normalizeCachedVerificationResultState(nextState);
+
+    const sessionStorage = chrome?.storage?.session;
+    if (!sessionStorage) {
+      return;
+    }
+
+    const storageKey = getIcloudVerificationResultStorageKey();
+    try {
+      if (cachedVerificationResultState) {
+        await sessionStorage.set({
+          [storageKey]: cachedVerificationResultState,
+        });
+        return;
+      }
+      if (typeof sessionStorage.remove === 'function') {
+        await sessionStorage.remove(storageKey);
+      } else {
+        await sessionStorage.set({ [storageKey]: null });
+      }
+    } catch (err) {
+      console.warn(ICLOUD_MAIL_PREFIX, 'Could not persist iCloud verification result cache:', err?.message || err);
+    }
+  }
+
+  async function ensureVerificationResultSession(step, payload = {}) {
+    if (cachedVerificationResultReadyPromise) {
+      await cachedVerificationResultReadyPromise;
+      cachedVerificationResultReadyPromise = null;
+    }
+
+    const nextSessionKey = buildVerificationSessionKey(step, payload);
+    if (!nextSessionKey) {
+      await persistCachedVerificationResultState(null);
+      return '';
+    }
+
+    if (cachedVerificationResultState?.sessionKey === nextSessionKey) {
+      return nextSessionKey;
+    }
+
+    await persistCachedVerificationResultState(null);
+    return nextSessionKey;
+  }
+
+  async function cacheVerificationPollSuccess(step, payload, result = {}) {
+    const sessionKey = await ensureVerificationResultSession(step, payload);
+    const code = String(result?.code || '').trim();
+    if (!sessionKey || !code) {
+      return result;
+    }
+
+    const cachedState = {
+      sessionKey,
+      step: Math.max(0, Number(step) || 0),
+      code,
+      emailTimestamp: Number.isFinite(Number(result?.emailTimestamp))
+        ? Number(result.emailTimestamp)
+        : 0,
+      preview: String(result?.preview || ''),
+      cachedAt: Date.now(),
+    };
+    await persistCachedVerificationResultState(cachedState);
+
+    return {
+      ...result,
+      sessionKey,
+    };
+  }
+
+  async function clearCachedVerificationResultForSession(step, payload = {}) {
+    const sessionKey = buildVerificationSessionKey(step, payload);
+    if (!sessionKey) {
+      await persistCachedVerificationResultState(null);
+      return;
+    }
+    if (cachedVerificationResultState?.sessionKey !== sessionKey) {
+      return;
+    }
+    await persistCachedVerificationResultState(null);
+  }
+
   function isVisibleElement(node) {
     return Boolean(node instanceof HTMLElement)
       && (Boolean(node.offsetParent) || getComputedStyle(node).position === 'fixed');
@@ -388,13 +527,14 @@ if (isTopFrame) {
     const excludedCodeSet = new Set(excludeCodes.filter(Boolean));
     const FALLBACK_AFTER = 3;
     const filters = buildVerificationMailFilters({ senderFilters, subjectFilters });
+    await ensureVerificationResultSession(step, payload);
 
     log(`步骤 ${step}：开始轮询 iCloud 邮箱（最多 ${maxAttempts} 次）`);
     await waitForElement('.content-container', 10000);
 
     const firstPassResult = await tryReadNearTimeFirstPass(step, payload, filters, excludedCodeSet);
     if (firstPassResult?.code) {
-      return firstPassResult;
+      return cacheVerificationPollSuccess(step, payload, firstPassResult);
     }
 
     await sleep(1500);
@@ -447,12 +587,12 @@ if (isTopFrame) {
 
         const source = useFallback && existingSignatures.has(signature) ? '回退匹配邮件' : '新邮件';
         log(`步骤 ${step}：已找到验证码：${code}（来源：${source}）`, 'ok');
-        return {
+        return cacheVerificationPollSuccess(step, payload, {
           ok: true,
           code,
           emailTimestamp: Date.now(),
           preview: (opened?.combinedText || meta.combinedText).slice(0, 160),
-        };
+        });
       }
 
       if (attempt === FALLBACK_AFTER + 1) {

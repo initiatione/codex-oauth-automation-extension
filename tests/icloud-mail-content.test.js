@@ -429,3 +429,74 @@ return {
 
   assert.equal(result.code, '982219');
 });
+
+test('iCloud verification result cache keeps the current session and clears on a new session', async () => {
+  const bundle = [
+    extractFunction('getIcloudVerificationResultStorageKey'),
+    extractFunction('buildVerificationSessionKey'),
+    extractFunction('normalizeCachedVerificationResultState'),
+    extractFunction('persistCachedVerificationResultState'),
+    extractFunction('ensureVerificationResultSession'),
+    extractFunction('cacheVerificationPollSuccess'),
+  ].join('\n');
+
+  const api = new Function(`
+let cachedVerificationResultState = null;
+let cachedVerificationResultReadyPromise = Promise.resolve();
+let persistedState = null;
+const writes = [];
+const chrome = {
+  storage: {
+    session: {
+      async get(key) {
+        return { [key]: persistedState };
+      },
+      async set(payload) {
+        persistedState = Object.prototype.hasOwnProperty.call(payload, 'icloudVerificationResultState')
+          ? payload.icloudVerificationResultState
+          : persistedState;
+        writes.push(persistedState);
+      },
+      async remove() {
+        persistedState = null;
+        writes.push(null);
+      },
+    },
+  },
+};
+${bundle}
+return {
+  ensureVerificationResultSession,
+  cacheVerificationPollSuccess,
+  getPersistedState() {
+    return persistedState;
+  },
+  getWrites() {
+    return writes.slice();
+  },
+};
+`)();
+
+  const firstResult = await api.cacheVerificationPollSuccess(
+    8,
+    { sessionKey: '8:1000' },
+    { code: '654321', emailTimestamp: 123, preview: 'preview' }
+  );
+
+  assert.equal(firstResult.sessionKey, '8:1000');
+  assert.deepStrictEqual(api.getPersistedState(), {
+    sessionKey: '8:1000',
+    step: 8,
+    code: '654321',
+    emailTimestamp: 123,
+    preview: 'preview',
+    cachedAt: api.getPersistedState().cachedAt,
+  });
+
+  await api.ensureVerificationResultSession(8, { sessionKey: '8:1000' });
+  assert.equal(api.getPersistedState().sessionKey, '8:1000');
+
+  await api.ensureVerificationResultSession(8, { sessionKey: '8:2000' });
+  assert.equal(api.getPersistedState(), null);
+  assert.equal(api.getWrites().at(-1), null);
+});
