@@ -233,6 +233,7 @@ const inputAutoSkipFailuresThreadIntervalMinutes = { value: '5' };
 const inputAutoDelayEnabled = { checked: true };
 const inputAutoDelayMinutes = { value: '30' };
 const inputAutoStepDelaySeconds = { value: '10' };
+const inputStep6RegistrationSuccessWaitSeconds = { value: '20' };
 const inputOAuthFlowTimeoutEnabled = { checked: true };
 const inputVerificationResendCount = { value: '6' };
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
@@ -282,6 +283,7 @@ function normalizeCloudflareTempEmailReceiveMailboxValue(value) { return String(
 function normalizeAutoRunThreadIntervalMinutes(value) { return Number(value) || 0; }
 function normalizeAutoDelayMinutes(value) { return Number(value) || 30; }
 function normalizeAutoStepDelaySeconds(value) { return value === '' ? null : Number(value); }
+function normalizeStep6RegistrationSuccessWaitSecondsValue(value) { return Number(value) || 20; }
 function normalizeVerificationResendCount(value, fallback) { return Number.isFinite(Number(value)) ? Number(value) : fallback; }
 function normalizePhoneSmsProvider(value = '') { return String(value || '').trim().toLowerCase() === '5sim' ? '5sim' : 'hero-sms'; }
 function getSelectedPhoneSmsProvider() { return normalizePhoneSmsProvider(selectPhoneSmsProvider?.value || latestState?.phoneSmsProvider); }

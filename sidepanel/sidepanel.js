@@ -367,6 +367,7 @@ const inputAutoSkipFailuresThreadIntervalMinutes = document.getElementById('inpu
 const inputAutoDelayEnabled = document.getElementById('input-auto-delay-enabled');
 const inputAutoDelayMinutes = document.getElementById('input-auto-delay-minutes');
 const inputAutoStepDelaySeconds = document.getElementById('input-auto-step-delay-seconds');
+const inputStep6RegistrationSuccessWaitSeconds = document.getElementById('input-step6-registration-success-wait-seconds');
 const inputOAuthFlowTimeoutEnabled = document.getElementById('input-oauth-flow-timeout-enabled');
 const inputVerificationResendCount = document.getElementById('input-verification-resend-count');
 const rowPhoneVerificationEnabled = document.getElementById('row-phone-verification-enabled');
@@ -535,6 +536,9 @@ const AUTO_FALLBACK_THREAD_INTERVAL_DEFAULT_MINUTES = 0;
 const AUTO_RUN_MAX_RETRIES_PER_ROUND = 3;
 const AUTO_STEP_DELAY_MIN_SECONDS = 0;
 const AUTO_STEP_DELAY_MAX_SECONDS = 600;
+const DEFAULT_STEP6_REGISTRATION_SUCCESS_WAIT_SECONDS = 20;
+const STEP6_REGISTRATION_SUCCESS_WAIT_MIN_SECONDS = 0;
+const STEP6_REGISTRATION_SUCCESS_WAIT_MAX_SECONDS = 300;
 const VERIFICATION_RESEND_COUNT_MIN = 0;
 const VERIFICATION_RESEND_COUNT_MAX = 20;
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
@@ -2281,6 +2285,18 @@ function formatAutoStepDelayInputValue(value) {
   return normalized === null ? '' : String(normalized);
 }
 
+function normalizeStep6RegistrationSuccessWaitSecondsValue(value) {
+  const rawValue = String(value ?? '').trim();
+  const numeric = Number(rawValue);
+  if (!rawValue || !Number.isFinite(numeric)) {
+    return DEFAULT_STEP6_REGISTRATION_SUCCESS_WAIT_SECONDS;
+  }
+  return Math.min(
+    STEP6_REGISTRATION_SUCCESS_WAIT_MAX_SECONDS,
+    Math.max(STEP6_REGISTRATION_SUCCESS_WAIT_MIN_SECONDS, Math.floor(numeric))
+  );
+}
+
 function normalizeCustomEmailPoolEntries(value = '') {
   const source = Array.isArray(value)
     ? value
@@ -3360,6 +3376,9 @@ function collectSettingsPayload() {
     autoRunDelayEnabled: inputAutoDelayEnabled.checked,
     autoRunDelayMinutes: normalizeAutoDelayMinutes(inputAutoDelayMinutes.value),
     autoStepDelaySeconds: normalizeAutoStepDelaySeconds(inputAutoStepDelaySeconds.value),
+    step6RegistrationSuccessWaitSeconds: normalizeStep6RegistrationSuccessWaitSecondsValue(
+      inputStep6RegistrationSuccessWaitSeconds?.value
+    ),
     oauthFlowTimeoutEnabled: typeof inputOAuthFlowTimeoutEnabled !== 'undefined' && inputOAuthFlowTimeoutEnabled
       ? Boolean(inputOAuthFlowTimeoutEnabled.checked)
       : true,
@@ -7697,6 +7716,9 @@ function applyAutoRunStatus(payload = currentAutoRun) {
   if (typeof inputSub2ApiAccountPriority !== 'undefined' && inputSub2ApiAccountPriority) {
     inputSub2ApiAccountPriority.disabled = locked;
   }
+  if (typeof inputStep6RegistrationSuccessWaitSeconds !== 'undefined' && inputStep6RegistrationSuccessWaitSeconds) {
+    inputStep6RegistrationSuccessWaitSeconds.disabled = locked;
+  }
   inputAutoSkipFailures.disabled = scheduled;
 
   const lockedRunCount = typeof getLockedRunCountFromEmailPool === 'function'
@@ -8170,6 +8192,9 @@ function applySettingsState(state) {
   inputAutoDelayEnabled.checked = Boolean(state?.autoRunDelayEnabled);
   inputAutoDelayMinutes.value = String(normalizeAutoDelayMinutes(state?.autoRunDelayMinutes));
   inputAutoStepDelaySeconds.value = formatAutoStepDelayInputValue(state?.autoStepDelaySeconds);
+  if (typeof inputStep6RegistrationSuccessWaitSeconds !== 'undefined' && inputStep6RegistrationSuccessWaitSeconds) {
+    inputStep6RegistrationSuccessWaitSeconds.value = String(normalizeStep6RegistrationSuccessWaitSecondsValue(state?.step6RegistrationSuccessWaitSeconds));
+  }
   if (typeof inputOAuthFlowTimeoutEnabled !== 'undefined' && inputOAuthFlowTimeoutEnabled) {
     inputOAuthFlowTimeoutEnabled.checked = state?.oauthFlowTimeoutEnabled !== undefined
       ? Boolean(state.oauthFlowTimeoutEnabled)
@@ -12515,6 +12540,17 @@ inputAutoStepDelaySeconds.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputStep6RegistrationSuccessWaitSeconds?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputStep6RegistrationSuccessWaitSeconds?.addEventListener('blur', () => {
+  inputStep6RegistrationSuccessWaitSeconds.value = String(
+    normalizeStep6RegistrationSuccessWaitSecondsValue(inputStep6RegistrationSuccessWaitSeconds.value)
+  );
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 inputVerificationResendCount?.addEventListener('input', () => {
   markSettingsDirty(true);
   scheduleSettingsAutoSave();
@@ -13406,6 +13442,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.autoStepDelaySeconds !== undefined) {
         inputAutoStepDelaySeconds.value = formatAutoStepDelayInputValue(message.payload.autoStepDelaySeconds);
+      }
+      if (
+        message.payload.step6RegistrationSuccessWaitSeconds !== undefined
+        && typeof inputStep6RegistrationSuccessWaitSeconds !== 'undefined'
+        && inputStep6RegistrationSuccessWaitSeconds
+      ) {
+        inputStep6RegistrationSuccessWaitSeconds.value = String(
+          normalizeStep6RegistrationSuccessWaitSecondsValue(message.payload.step6RegistrationSuccessWaitSeconds)
+        );
       }
       if (message.payload.oauthFlowTimeoutEnabled !== undefined && typeof inputOAuthFlowTimeoutEnabled !== 'undefined' && inputOAuthFlowTimeoutEnabled) {
         inputOAuthFlowTimeoutEnabled.checked = Boolean(message.payload.oauthFlowTimeoutEnabled);

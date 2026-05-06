@@ -12,7 +12,10 @@
     } = deps;
 
     async function executeStep6() {
-      const waitMs = Math.max(0, Math.floor(Number(registrationSuccessWaitMs) || 0));
+      const waitMsInput = typeof registrationSuccessWaitMs === 'function'
+        ? await registrationSuccessWaitMs()
+        : registrationSuccessWaitMs;
+      const waitMs = Math.max(0, Math.floor(Number(waitMsInput) || 0));
       if (waitMs > 0) {
         await addLog(`步骤 6：等待 ${Math.round(waitMs / 1000)} 秒，确认注册成功并让页面稳定...`, 'info');
         await sleepWithStop(waitMs);

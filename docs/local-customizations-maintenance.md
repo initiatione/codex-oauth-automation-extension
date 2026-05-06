@@ -12,11 +12,12 @@
 2. 自定义邮箱池/账号池表格管理能力。
 3. Hotmail / 2925 账号池搜索筛选。
 4. Plus 免费试用资格提前判断，以及跳过账号仍标记“已用”。
-5. SUB2API 多分组创建账号。
+5. SUB2API 多分组创建账号与账号优先级。
 6. OAuth 登录使用全新标签页。
-7. 接码平台多平台适配：HeroSMS + 5sim。
+7. 接码平台多平台适配：HeroSMS + 5sim，以及 HeroSMS 免费手机号复用。
 8. Plus 支付方式适配：PayPal + GoPay。
-9. 本地导出配置 `/config.json` 忽略规则。
+9. Step 6 注册成功稳定等待时间可配置。
+10. 本地导出配置 `/config.json` 忽略规则。
 
 推荐每次同步后执行：
 
@@ -39,7 +40,7 @@ cc7671e feat(sub2api): 支持多分组创建账号
 b3790c1 fix(auth): OAuth 登录使用全新标签页
 ```
 
-补充：接码平台多平台适配是当前分支新增的本地自定义功能；真实 5sim API Key 只允许通过侧边栏输入并保存到本地配置，不写入仓库、测试或文档。
+补充：接码平台多平台适配是当前分支新增的本地自定义功能；真实 5sim API Key 只允许通过侧边栏输入并保存到本地配置，不写入仓库、测试或文档。当前分支还保留 SUB2API 账号优先级、HeroSMS 免费手机号复用，以及 Step 6 注册成功等待时间可配置能力；同步上游后需要重新跑对应测试确认未被覆盖。
 
 排查本地定制范围可用：
 
@@ -289,21 +290,26 @@ Plus 模式新增 `plusPaymentMethod`：
 2. PayPal 和 GoPay 共享 Plus 可见步骤，第 8 步仍使用 `paypal-approve` 这个 step key，但展示标题会按 `plusPaymentMethod` 变为 PayPal 或 GoPay 文案，后台也会按该字段分发到 PayPal 或 GoPay executor。
 3. GoPay 页面和 WhatsApp Web 的真实 DOM 可能变化；后续联调时优先在每个页面抓 `GOPAY_GET_STATE / WHATSAPP_GET_STATE` 输出，再补精确选择器。
 
-## 6. SUB2API 多分组创建账号
+## 6. SUB2API 多分组创建账号与账号优先级
 
 ### 目标
 
-支持一次配置多个 SUB2API 分组，完成 OAuth 后为多个分组创建账号。
+支持一次配置多个 SUB2API 分组，完成 OAuth 后为多个分组创建账号；同时支持在侧边栏配置 SUB2API 账号优先级，并在最终创建账号时写入 `priority`。
 
 ### 关键文件
 
 | 文件 | 作用 |
 | --- | --- |
 | `content/sub2api-panel.js` | 多分组解析、查询和创建账号。 |
-| `sidepanel/sidepanel.html` | 分组输入框提示支持多个分组。 |
-| `background.js` / `background/message-router.js` | payload 透传。 |
-| `background/steps/platform-verify.js` | Plus platform verify 兼容。 |
+| `sidepanel/sidepanel.html` | 分组输入框提示支持多个分组，并在分组下方展示账号优先级输入。 |
+| `sidepanel/sidepanel.js` | 账号优先级输入保存、回显、运行态同步和自动运行锁定。 |
+| `background.js` / `background/message-router.js` | 账号优先级持久化、规范化和 payload 透传。 |
+| `background/panel-bridge.js` | Step 1 生成 OAuth 地址时转发账号优先级。 |
+| `background/steps/platform-verify.js` | Plus platform verify 兼容，并把账号优先级继续传给内容脚本。 |
 | `tests/sub2api-panel-proxy.test.js` | SUB2API 代理与多分组测试。 |
+| `tests/sidepanel-sub2api-priority-settings.test.js` | 账号优先级 UI、保存和锁定测试。 |
+| `tests/background-panel-bridge-module.test.js` | Step 1 优先级透传测试。 |
+| `tests/background-platform-verify-cpa-api.test.js` | 平台验证优先级透传测试。 |
 
 ### 关键代码点
 
@@ -314,10 +320,19 @@ Plus 模式新增 `plusPaymentMethod`：
 - `sidepanel/sidepanel.html`
   - `input-sub2api-group`
   - placeholder：`默认 codex；多个用逗号或换行分隔`
+  - `input-sub2api-account-priority`
+- `background.js`
+  - `DEFAULT_SUB2API_ACCOUNT_PRIORITY = 1`
+  - `normalizeSub2ApiAccountPriority(...)`
+  - `PERSISTED_SETTING_DEFAULTS.sub2apiAccountPriority`
+- `content/sub2api-panel.js`
+  - 创建账号 payload 的 `priority`
 
 ### 维护注意
 
-上游如果只按单个 `sub2apiGroupId` 写回，需要保留本地 `sub2apiGroupIds` 数组逻辑。
+1. 上游如果只按单个 `sub2apiGroupId` 写回，需要保留本地 `sub2apiGroupIds` 数组逻辑。
+2. `priority` 必须符合 SUB2API 设定：大于等于 `1` 的整数；空值、非法值回退默认 `1`，不要写入 `0` 或负数。
+3. 账号优先级输入位于 SUB2API 分组下方，自动运行中应锁定，暂停或停止后再允许修改。
 
 ## 7. OAuth 登录使用全新标签页
 
@@ -336,7 +351,7 @@ OAuth 登录流程打开新标签页，避免复用旧页面导致状态污染�
 
 上游如果改 OAuth tab 打开方式，确认仍保留“全新标签页”语义，不要退回到复用已有 tab。
 
-## 8. 接码平台多平台适配：HeroSMS + 5sim
+## 8. 接码平台多平台适配：HeroSMS + 5sim 与免费复用
 
 ### 目标
 
@@ -346,6 +361,7 @@ OAuth 登录流程打开新标签页，避免复用旧页面导致状态污染�
 - 新增 `5sim` 平台，下拉框在接码设置卡片中直接可见。
 - 国家/地区列表、API Key、价格上限、余额、买号、查码、完成、取消、ban、复用均按当前 `phoneSmsProvider` 分发。当前侧边栏只开放三个常用地区：印度尼西亚、泰国、越南。
 - HeroSMS 继续使用原 `heroSms*` 字段；5sim 使用独立 `fiveSim*` 字段，切换平台时不会互相覆盖草稿。
+- HeroSMS 支持免费手机号复用：收到验证码后的号码会保存为 `freeReusablePhoneActivation`，后续轮次优先确认这个号码可再次收码并复用；如果免费复用失败或一直未 ready，不会静默购买或重新激活付费号码。
 
 ### 关键文件
 
@@ -374,6 +390,9 @@ OAuth 登录流程打开新标签页，避免复用旧页面导致状态污染�
   - `heroSmsMaxPrice`
   - `heroSmsReuseEnabled`
   - `heroSmsAcquirePriority`
+  - `freePhoneReuseEnabled`
+  - `freePhoneReuseAutoEnabled`
+  - `freeReusablePhoneActivation`
 - 5sim：
   - `fiveSimApiKey`
   - `fiveSimCountryId`
@@ -388,6 +407,7 @@ OAuth 登录流程打开新标签页，避免复用旧页面导致状态污染�
 2. 上游同步时如果改了 Step 9 手机号验证，必须保留 `currentPhoneActivation.provider` 驱动的后续分发。
 3. 上游同步时如果改了 sidepanel 接码区域，必须保留 `select-phone-sms-provider`，且地区列表按平台加载：HeroSMS 数字国家 ID，5sim 字符串 country slug；当前只展示并保存印度尼西亚、泰国、越南，避免旧配置中的英国/美国等地区回写。
 4. 5sim 产品码当前固定为 `openai`，operator 默认 `any`；价格上限为空时按价格目录最低可用价尝试。
+5. 免费复用的核心边界是“复用同一个已保留号码但不重复付费”；一旦号码已收到验证码并进入可保留状态，后续失败不能静默落回购买新号码。
 
 ### 验证
 
@@ -400,7 +420,37 @@ node --check sidepanel/sidepanel.js
 node --test tests/five-sim-provider.test.js tests/phone-verification-flow.test.js tests/sidepanel-phone-verification-settings.test.js
 ```
 
-## 9. 本地配置文件忽略
+## 9. Step 6 注册成功等待时间可配置
+
+### 目标
+
+上游 6.3 后 Step 6 改为“等待注册成功状态稳定”。本地需要保留侧边栏可调等待时间能力，避免固定 20 秒无法按实际网络和页面稳定性调整。
+
+### 关键文件
+
+| 文件 | 作用 |
+| --- | --- |
+| `background.js` | 持久化 `step6RegistrationSuccessWaitSeconds`，规范化 `0~300` 秒，并在 Step 6 执行前读取最新配置。 |
+| `background/steps/wait-registration-success.js` | Step 6 执行器，支持传入动态等待毫秒值。 |
+| `sidepanel/sidepanel.html` | “第6步等待”输入框。 |
+| `sidepanel/sidepanel.js` | 输入保存、回显、DATA_UPDATED 同步和自动运行锁定。 |
+| `tests/background-step6-retry-limit.test.js` | Step 6 默认等待和动态等待测试。 |
+| `tests/background-account-history-settings.test.js` | 持久化配置规范化测试。 |
+| `tests/sidepanel-step6-registration-wait-settings.test.js` | 侧边栏输入、保存、回显和锁定测试。 |
+
+### 维护注意
+
+1. 默认值为 `20` 秒，允许 `0~300` 秒，`0` 表示不额外等待。
+2. 后台必须在每次执行 Step 6 前读取最新持久化配置，不能只在 service worker 初始化时固定一次。
+3. 自动运行中输入框需要锁定，暂停或停止后再允许修改。
+
+### 验证
+
+```bash
+node --test tests/background-step6-retry-limit.test.js tests/background-account-history-settings.test.js tests/sidepanel-step6-registration-wait-settings.test.js
+```
+
+## 10. 本地配置文件忽略
 
 ### 目标
 

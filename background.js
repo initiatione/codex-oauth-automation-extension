@@ -315,6 +315,9 @@ const AUTO_RUN_RETRY_DELAY_MS = 3000;
 const AUTO_RUN_MAX_RETRIES_PER_ROUND = 3;
 const AUTO_STEP_DELAY_MIN_ALLOWED_SECONDS = 0;
 const AUTO_STEP_DELAY_MAX_ALLOWED_SECONDS = 600;
+const DEFAULT_STEP6_REGISTRATION_SUCCESS_WAIT_SECONDS = 20;
+const STEP6_REGISTRATION_SUCCESS_WAIT_MIN_SECONDS = 0;
+const STEP6_REGISTRATION_SUCCESS_WAIT_MAX_SECONDS = 300;
 const VERIFICATION_RESEND_COUNT_MIN = 0;
 const VERIFICATION_RESEND_COUNT_MAX = 20;
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
@@ -633,6 +636,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoRunDelayEnabled: false,
   autoRunDelayMinutes: 30,
   autoStepDelaySeconds: null,
+  step6RegistrationSuccessWaitSeconds: DEFAULT_STEP6_REGISTRATION_SUCCESS_WAIT_SECONDS,
   phoneVerificationEnabled: false,
   freePhoneReuseEnabled: true,
   freePhoneReuseAutoEnabled: true,
@@ -713,7 +717,6 @@ const PERSISTED_SETTING_DEFAULTS = {
 const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);
 const SETTINGS_EXPORT_SCHEMA_VERSION = 1;
 const SETTINGS_EXPORT_FILENAME_PREFIX = 'multipage-settings';
-const STEP6_REGISTRATION_SUCCESS_WAIT_MS = 20000;
 
 const DEFAULT_STATE = {
   currentStep: 0, // 当前流程执行到的步骤编号。
@@ -915,6 +918,18 @@ function normalizeAutoStepDelaySeconds(value, fallback = null) {
   return Math.min(
     AUTO_STEP_DELAY_MAX_ALLOWED_SECONDS,
     Math.max(AUTO_STEP_DELAY_MIN_ALLOWED_SECONDS, Math.floor(numeric))
+  );
+}
+
+function normalizeStep6RegistrationSuccessWaitSeconds(
+  value,
+  fallback = DEFAULT_STEP6_REGISTRATION_SUCCESS_WAIT_SECONDS
+) {
+  return normalizeBoundedIntegerSetting(
+    value,
+    fallback,
+    STEP6_REGISTRATION_SUCCESS_WAIT_MIN_SECONDS,
+    STEP6_REGISTRATION_SUCCESS_WAIT_MAX_SECONDS
   );
 }
 
@@ -2319,6 +2334,11 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeAutoRunDelayMinutes(value);
     case 'autoStepDelaySeconds':
       return normalizeAutoStepDelaySeconds(value, PERSISTED_SETTING_DEFAULTS.autoStepDelaySeconds);
+    case 'step6RegistrationSuccessWaitSeconds':
+      return normalizeStep6RegistrationSuccessWaitSeconds(
+        value,
+        PERSISTED_SETTING_DEFAULTS.step6RegistrationSuccessWaitSeconds
+      );
     case 'verificationResendCount':
       return normalizeVerificationResendCount(value, DEFAULT_VERIFICATION_RESEND_COUNT);
     case 'phoneVerificationReplacementLimit':
@@ -2572,6 +2592,15 @@ async function getPersistedSettings() {
     ...LEGACY_VERIFICATION_RESEND_COUNT_KEYS,
   ]);
   return buildPersistentSettingsPayload(stored, { fillDefaults: true });
+}
+
+async function getStep6RegistrationSuccessWaitMs() {
+  const settings = await getPersistedSettings();
+  const waitSeconds = normalizeStep6RegistrationSuccessWaitSeconds(
+    settings?.step6RegistrationSuccessWaitSeconds,
+    PERSISTED_SETTING_DEFAULTS.step6RegistrationSuccessWaitSeconds
+  );
+  return waitSeconds * 1000;
 }
 
 async function getPersistedAliasState() {
@@ -10488,7 +10517,7 @@ const step5Executor = self.MultiPageBackgroundStep5?.createStep5Executor({
 const step6Executor = self.MultiPageBackgroundStep6?.createStep6Executor({
   addLog,
   completeStepFromBackground,
-  registrationSuccessWaitMs: STEP6_REGISTRATION_SUCCESS_WAIT_MS,
+  registrationSuccessWaitMs: getStep6RegistrationSuccessWaitMs,
   sleepWithStop,
 });
 const step7Executor = self.MultiPageBackgroundStep7?.createStep7Executor({

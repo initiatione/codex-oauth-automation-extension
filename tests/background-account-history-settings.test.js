@@ -78,6 +78,7 @@ test('background account history settings are normalized independently from hotm
     extractFunction('normalizeFiveSimMaxPrice'),
     extractFunction('normalizeFiveSimCountryFallback'),
     extractFunction('normalizeSub2ApiGroupNames'),
+    extractFunction('normalizeStep6RegistrationSuccessWaitSeconds'),
     extractFunction('normalizeBoundedIntegerSetting'),
     extractFunction('normalizeLocalHttpBaseUrl'),
     extractFunction('normalizePersistentSettingValue'),
@@ -105,6 +106,9 @@ const PHONE_CODE_POLL_ROUNDS_MIN = 1;
 const PHONE_CODE_POLL_ROUNDS_MAX = 120;
 const DEFAULT_PHONE_CODE_POLL_ROUNDS = 4;
 const DEFAULT_SUB2API_PROXY_NAME = '';
+const DEFAULT_STEP6_REGISTRATION_SUCCESS_WAIT_SECONDS = 20;
+const STEP6_REGISTRATION_SUCCESS_WAIT_MIN_SECONDS = 0;
+const STEP6_REGISTRATION_SUCCESS_WAIT_MAX_SECONDS = 300;
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
 const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
 const VERIFICATION_RESEND_COUNT_MIN = 0;
@@ -261,6 +265,10 @@ return {
     api.normalizePersistentSettingValue('sub2apiDefaultProxyName', ' proxy-a '),
     'proxy-a'
   );
+  assert.equal(api.normalizePersistentSettingValue('step6RegistrationSuccessWaitSeconds', '7'), 7);
+  assert.equal(api.normalizePersistentSettingValue('step6RegistrationSuccessWaitSeconds', '-1'), 0);
+  assert.equal(api.normalizePersistentSettingValue('step6RegistrationSuccessWaitSeconds', '999'), 300);
+  assert.equal(api.normalizePersistentSettingValue('step6RegistrationSuccessWaitSeconds', ''), 20);
   assert.deepStrictEqual(
     api.normalizePersistentSettingValue('sub2apiGroupNames', [' codex ', 'openai-plus', 'CODEX']),
     ['codex', 'openai-plus']

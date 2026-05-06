@@ -203,6 +203,7 @@ const inputAutoSkipFailuresThreadIntervalMinutes = { value: '0' };
 const inputAutoDelayEnabled = { checked: false };
 const inputAutoDelayMinutes = { value: '30' };
 const inputAutoStepDelaySeconds = { value: '' };
+const inputStep6RegistrationSuccessWaitSeconds = { value: '20' };
 const inputOAuthFlowTimeoutEnabled = { checked: true };
 const inputVerificationResendCount = { value: '4' };
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
@@ -257,6 +258,7 @@ function normalizeAccountRunHistoryHelperBaseUrlValue(value) { return String(val
 function normalizeAutoRunThreadIntervalMinutes(value) { return Number(value) || 0; }
 function normalizeAutoDelayMinutes(value) { return Number(value) || 30; }
 function normalizeAutoStepDelaySeconds(value) { return value === '' ? null : Number(value); }
+function normalizeStep6RegistrationSuccessWaitSecondsValue(value) { return Number(value) || 20; }
 function normalizeVerificationResendCount(value, fallback) { return Number(value) || fallback; }
 function normalizePhoneSmsProvider(value = '') { return String(value || '').trim().toLowerCase() === '5sim' ? '5sim' : 'hero-sms'; }
 function getSelectedPhoneSmsProvider() { return normalizePhoneSmsProvider(selectPhoneSmsProvider?.value || latestState?.phoneSmsProvider); }

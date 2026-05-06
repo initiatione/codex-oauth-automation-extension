@@ -32,6 +32,37 @@ test('step 6 waits for registration success and completes from background', asyn
   assert.ok(events.logs.some(({ message }) => /等待 20 秒/.test(message)));
 });
 
+test('step 6 resolves configurable registration success wait before execution', async () => {
+  const source = fs.readFileSync('background/steps/wait-registration-success.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundStep6;`)(globalScope);
+
+  const events = {
+    logs: [],
+    waits: [],
+    completedSteps: [],
+  };
+
+  const executor = api.createStep6Executor({
+    addLog: async (message, level = 'info') => {
+      events.logs.push({ message, level });
+    },
+    completeStepFromBackground: async (step) => {
+      events.completedSteps.push(step);
+    },
+    registrationSuccessWaitMs: async () => 7000,
+    sleepWithStop: async (ms) => {
+      events.waits.push(ms);
+    },
+  });
+
+  await executor.executeStep6();
+
+  assert.deepStrictEqual(events.waits, [7000]);
+  assert.deepStrictEqual(events.completedSteps, [6]);
+  assert.ok(events.logs.some(({ message }) => /等待 7 秒/.test(message)));
+});
+
 test('step 7 retries up to configured limit and then fails', async () => {
   const source = fs.readFileSync('background/steps/oauth-login.js', 'utf8');
   const globalScope = {};

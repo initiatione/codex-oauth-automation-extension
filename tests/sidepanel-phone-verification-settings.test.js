@@ -743,6 +743,7 @@ const inputAutoSkipFailuresThreadIntervalMinutes = { value: '0' };
 const inputAutoDelayEnabled = { checked: false };
 const inputAutoDelayMinutes = { value: '30' };
 const inputAutoStepDelaySeconds = { value: '' };
+const inputStep6RegistrationSuccessWaitSeconds = { value: '20' };
 const inputPhoneVerificationEnabled = { checked: true };
 const inputFreePhoneReuseEnabled = { checked: true };
 const inputFreePhoneReuseAutoEnabled = { checked: true };
@@ -831,6 +832,7 @@ function normalizeAccountRunHistoryHelperBaseUrlValue(value) { return String(val
 function normalizeAutoRunThreadIntervalMinutes(value) { return Number(value) || 0; }
 function normalizeAutoDelayMinutes(value) { return Number(value) || 30; }
 function normalizeAutoStepDelaySeconds(value) { return value === '' ? null : Number(value); }
+function normalizeStep6RegistrationSuccessWaitSecondsValue(value) { return Number(value) || 20; }
 function normalizeVerificationResendCount(value, fallback) { return Number(value) || fallback; }
 ${extractFunction('normalizePhoneSmsProvider')}
 ${extractFunction('normalizePhoneSmsProviderValue')}
