@@ -3,7 +3,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
 const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
+const css = fs.readFileSync('sidepanel/sidepanel.css', 'utf8');
 const source = fs.readFileSync('sidepanel/sidepanel.js', 'utf8');
+
+function extractCssBlock(selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = css.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`));
+  return match?.[1] || '';
+}
 
 function extractFunction(name) {
   const markers = [`async function ${name}(`, `function ${name}(`];
@@ -52,9 +59,14 @@ function extractFunction(name) {
 test('sidepanel exposes configurable step 6 registration wait in delay settings', () => {
   assert.match(html, /id="row-step6-registration-success-wait-seconds"/);
   assert.match(html, /id="input-step6-registration-success-wait-seconds"/);
-  assert.match(html, /id="row-step6-registration-success-wait-seconds"[\s\S]*<span class="data-label">第6步<\/span>/);
-  assert.match(html, /<span class="setting-caption">注册成功等待<\/span>/);
+  assert.match(
+    html,
+    /id="row-step6-registration-success-wait-seconds"[\s\S]*<span class="data-label step6-wait-label">第6步 <span class="data-label-sub">注册成功等待<\/span><\/span>/
+  );
+  assert.doesNotMatch(html, /id="row-step6-registration-success-wait-seconds"[\s\S]*<span class="setting-caption">注册成功等待<\/span>/);
   assert.doesNotMatch(html, /<span class="setting-caption">第6步等待<\/span>/);
+  assert.match(extractCssBlock('#row-step6-registration-success-wait-seconds .step6-wait-label'), /width:\s*auto;/);
+  assert.doesNotMatch(extractCssBlock('.step6-wait-controls'), /margin-left:\s*auto;/);
 
   const inputTag = html.match(/<input[^>]*id="input-step6-registration-success-wait-seconds"[^>]*>/)?.[0] || '';
   assert.match(inputTag, /type="number"/);

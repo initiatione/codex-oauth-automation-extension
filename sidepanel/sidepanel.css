@@ -1226,6 +1226,26 @@ header {
   text-transform: none;
 }
 
+#row-step6-registration-success-wait-seconds .step6-wait-label {
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+#row-step6-registration-success-wait-seconds .data-label-sub {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.step6-wait-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .data-value {
   font-size: 13px;
   color: var(--text-muted);
