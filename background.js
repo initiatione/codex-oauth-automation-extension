@@ -634,6 +634,8 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoRunDelayMinutes: 30,
   autoStepDelaySeconds: null,
   phoneVerificationEnabled: false,
+  freePhoneReuseEnabled: true,
+  freePhoneReuseAutoEnabled: true,
   signupMethod: DEFAULT_SIGNUP_METHOD,
   phoneSmsProvider: DEFAULT_PHONE_SMS_PROVIDER,
   phoneSmsProviderOrder: [],
@@ -800,6 +802,7 @@ const DEFAULT_STATE = {
   currentPhoneVerificationCountdownWindowIndex: 0,
   currentPhoneVerificationCountdownWindowTotal: 0,
   reusablePhoneActivation: null,
+  freeReusablePhoneActivation: null,
   phoneReusableActivationPool: [],
   signupPhoneNumber: '',
   signupPhoneActivation: null,
@@ -2302,6 +2305,8 @@ function normalizePersistentSettingValue(key, value) {
     case 'gopayHelperLocalSmsHelperEnabled':
     case 'autoRunDelayEnabled':
     case 'phoneVerificationEnabled':
+    case 'freePhoneReuseEnabled':
+    case 'freePhoneReuseAutoEnabled':
     case 'plusModeEnabled':
       return Boolean(value);
     case 'phoneSmsProvider':
@@ -3109,6 +3114,7 @@ async function resetState() {
       'tabRegistry',
       'sourceLastUrls',
       'reusablePhoneActivation',
+      'freeReusablePhoneActivation',
       'phoneReusableActivationPool',
       'luckmailApiKey',
       'luckmailBaseUrl',
@@ -3148,6 +3154,19 @@ async function resetState() {
       .map((entry) => normalizePhonePreferredActivation(entry))
       .filter(Boolean)
     : [];
+  const freeReusablePhoneActivation = (
+    prev.freeReusablePhoneActivation
+    && typeof prev.freeReusablePhoneActivation === 'object'
+    && !Array.isArray(prev.freeReusablePhoneActivation)
+    && String(
+      prev.freeReusablePhoneActivation.phoneNumber
+      ?? prev.freeReusablePhoneActivation.number
+      ?? prev.freeReusablePhoneActivation.phone
+      ?? ''
+    ).trim()
+  )
+    ? prev.freeReusablePhoneActivation
+    : null;
   await chrome.storage.session.clear();
   await chrome.storage.session.set({
     ...DEFAULT_STATE,
@@ -3170,6 +3189,8 @@ async function resetState() {
     currentLuckmailMailCursor: null,
     // Keep reusable phone activation across round resets so the same number can be reactivated up to maxUses.
     reusablePhoneActivation,
+    // Keep free reuse phone activation until the user clears or the flow retires it.
+    freeReusablePhoneActivation,
     phoneReusableActivationPool,
     preferredIcloudHost: prev.preferredIcloudHost || '',
   });
@@ -6627,6 +6648,53 @@ async function finalizePhoneActivationAfterSuccessfulFlow(state) {
     return null;
   }
   return phoneVerificationHelpers.finalizePendingPhoneActivationConfirmation(state);
+}
+
+async function clearFreeReusablePhoneActivation() {
+  await setState({ freeReusablePhoneActivation: null });
+  broadcastDataUpdate({ freeReusablePhoneActivation: null });
+  await addLog('已清除白嫖复用手机号记录。', 'ok');
+  return { ok: true, freeReusablePhoneActivation: null };
+}
+
+async function setFreeReusablePhoneActivation(record = {}) {
+  const phoneNumber = String(record.phoneNumber || record.number || record.phone || '').trim();
+  if (!phoneNumber) {
+    throw new Error('请先填写白嫖复用手机号。');
+  }
+  const state = await getState();
+  const activationId = String(record.activationId || record.id || record.activation || '').trim();
+  const countryId = Math.max(1, Math.floor(Number(record.countryId) || Number(state.heroSmsCountryId) || HERO_SMS_COUNTRY_ID));
+  const stateCountryLabel = Math.floor(Number(state.heroSmsCountryId) || 0) === countryId
+    ? String(state.heroSmsCountryLabel || '').trim()
+    : '';
+  const countryLabel = String(
+    record.countryLabel
+    || stateCountryLabel
+    || (countryId === HERO_SMS_COUNTRY_ID ? HERO_SMS_COUNTRY_LABEL : `Country #${countryId}`)
+  ).trim();
+  const activation = {
+    ...(activationId ? { activationId } : {}),
+    phoneNumber,
+    provider: PHONE_SMS_PROVIDER_HERO,
+    serviceCode: HERO_SMS_SERVICE_CODE,
+    countryId,
+    ...(countryLabel ? { countryLabel } : {}),
+    successfulUses: Math.max(0, Math.floor(Number(record.successfulUses) || 0)),
+    maxUses: Math.max(1, Math.floor(Number(record.maxUses) || 3)),
+    source: 'free-manual-reuse',
+    recordedAt: Date.now(),
+    manualOnly: !activationId,
+  };
+  await setState({ freeReusablePhoneActivation: activation });
+  broadcastDataUpdate({ freeReusablePhoneActivation: activation });
+  await addLog(
+    activationId
+      ? `已手动记录白嫖复用手机号 ${phoneNumber}（#${activationId}）。`
+      : `已手动记录白嫖复用手机号 ${phoneNumber}。未填写 HeroSMS 激活 ID，仅支持手动填号复用。`,
+    'ok'
+  );
+  return { ok: true, freeReusablePhoneActivation: activation };
 }
 
 // ============================================================
@@ -10610,6 +10678,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   clearAccountRunHistory: (...args) => clearAndBroadcastAccountRunHistory(...args),
   deleteAccountRunHistoryRecords: (...args) => deleteAndBroadcastAccountRunHistoryRecords(...args),
   clearAutoRunTimerAlarm,
+  clearFreeReusablePhoneActivation,
   clearLuckmailRuntimeState,
   clearStopRequest,
   closeLocalhostCallbackTabs,
@@ -10698,6 +10767,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   setContributionMode,
   setEmailState,
   setEmailStateSilently,
+  setFreeReusablePhoneActivation,
   setSignupPhoneState,
   setSignupPhoneStateSilently,
   setIcloudAliasPreservedState,
