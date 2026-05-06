@@ -480,6 +480,9 @@ function normalizeAutoRunThreadIntervalMinutes(value) { return Number(value) || 
 function normalizeAutoDelayMinutes(value) { return Number(value) || 30; }
 function formatAutoStepDelayInputValue(value) { return value == null ? '' : String(value); }
 function normalizeVerificationResendCount(value, fallback) { return Number(value) || fallback; }
+function syncStep6RegistrationSuccessWaitInputFromState(value) {
+  calls.push({ step6Wait: Number(value) || 20 });
+}
 function normalizeHeroSmsMaxPriceValue(value = '') { return String(value || '').trim(); }
 function normalizePhoneVerificationReplacementLimit(value, fallback = 3) {
   const numeric = Number(value);

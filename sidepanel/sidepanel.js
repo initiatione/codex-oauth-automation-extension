@@ -1115,6 +1115,7 @@ let settingsSaveRevision = 0;
 let signupPhoneInputDirty = false;
 let signupPhoneInputFocused = false;
 let signupPhoneInputPersistPromise = null;
+let step6RegistrationSuccessWaitInputDirty = false;
 let cloudflareDomainEditMode = false;
 let cloudflareTempEmailDomainEditMode = false;
 let modalChoiceResolver = null;
@@ -2295,6 +2296,34 @@ function normalizeStep6RegistrationSuccessWaitSecondsValue(value) {
     STEP6_REGISTRATION_SUCCESS_WAIT_MAX_SECONDS,
     Math.max(STEP6_REGISTRATION_SUCCESS_WAIT_MIN_SECONDS, Math.floor(numeric))
   );
+}
+
+function shouldPreserveStep6RegistrationSuccessWaitInputValue(stateValue) {
+  if (
+    typeof inputStep6RegistrationSuccessWaitSeconds === 'undefined'
+    || !inputStep6RegistrationSuccessWaitSeconds
+    || !step6RegistrationSuccessWaitInputDirty
+  ) {
+    return false;
+  }
+  const normalizedStateValue = String(normalizeStep6RegistrationSuccessWaitSecondsValue(stateValue));
+  if (String(inputStep6RegistrationSuccessWaitSeconds.value || '').trim() === normalizedStateValue) {
+    step6RegistrationSuccessWaitInputDirty = false;
+    return false;
+  }
+  return typeof document !== 'undefined'
+    && document.activeElement === inputStep6RegistrationSuccessWaitSeconds;
+}
+
+function syncStep6RegistrationSuccessWaitInputFromState(stateValue) {
+  if (typeof inputStep6RegistrationSuccessWaitSeconds === 'undefined' || !inputStep6RegistrationSuccessWaitSeconds) {
+    return;
+  }
+  if (!shouldPreserveStep6RegistrationSuccessWaitInputValue(stateValue)) {
+    inputStep6RegistrationSuccessWaitSeconds.value = String(
+      normalizeStep6RegistrationSuccessWaitSecondsValue(stateValue)
+    );
+  }
 }
 
 function normalizeCustomEmailPoolEntries(value = '') {
@@ -7717,7 +7746,7 @@ function applyAutoRunStatus(payload = currentAutoRun) {
     inputSub2ApiAccountPriority.disabled = locked;
   }
   if (typeof inputStep6RegistrationSuccessWaitSeconds !== 'undefined' && inputStep6RegistrationSuccessWaitSeconds) {
-    inputStep6RegistrationSuccessWaitSeconds.disabled = locked;
+    inputStep6RegistrationSuccessWaitSeconds.disabled = settingsCardLocked;
   }
   inputAutoSkipFailures.disabled = scheduled;
 
@@ -8192,9 +8221,7 @@ function applySettingsState(state) {
   inputAutoDelayEnabled.checked = Boolean(state?.autoRunDelayEnabled);
   inputAutoDelayMinutes.value = String(normalizeAutoDelayMinutes(state?.autoRunDelayMinutes));
   inputAutoStepDelaySeconds.value = formatAutoStepDelayInputValue(state?.autoStepDelaySeconds);
-  if (typeof inputStep6RegistrationSuccessWaitSeconds !== 'undefined' && inputStep6RegistrationSuccessWaitSeconds) {
-    inputStep6RegistrationSuccessWaitSeconds.value = String(normalizeStep6RegistrationSuccessWaitSecondsValue(state?.step6RegistrationSuccessWaitSeconds));
-  }
+  syncStep6RegistrationSuccessWaitInputFromState(state?.step6RegistrationSuccessWaitSeconds);
   if (typeof inputOAuthFlowTimeoutEnabled !== 'undefined' && inputOAuthFlowTimeoutEnabled) {
     inputOAuthFlowTimeoutEnabled.checked = state?.oauthFlowTimeoutEnabled !== undefined
       ? Boolean(state.oauthFlowTimeoutEnabled)
@@ -12541,6 +12568,7 @@ inputAutoStepDelaySeconds.addEventListener('blur', () => {
 });
 
 inputStep6RegistrationSuccessWaitSeconds?.addEventListener('input', () => {
+  step6RegistrationSuccessWaitInputDirty = true;
   markSettingsDirty(true);
   scheduleSettingsAutoSave();
 });
@@ -12548,6 +12576,7 @@ inputStep6RegistrationSuccessWaitSeconds?.addEventListener('blur', () => {
   inputStep6RegistrationSuccessWaitSeconds.value = String(
     normalizeStep6RegistrationSuccessWaitSecondsValue(inputStep6RegistrationSuccessWaitSeconds.value)
   );
+  step6RegistrationSuccessWaitInputDirty = false;
   saveSettings({ silent: true }).catch(() => { });
 });
 
@@ -13448,9 +13477,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         && typeof inputStep6RegistrationSuccessWaitSeconds !== 'undefined'
         && inputStep6RegistrationSuccessWaitSeconds
       ) {
-        inputStep6RegistrationSuccessWaitSeconds.value = String(
-          normalizeStep6RegistrationSuccessWaitSecondsValue(message.payload.step6RegistrationSuccessWaitSeconds)
-        );
+        syncStep6RegistrationSuccessWaitInputFromState(message.payload.step6RegistrationSuccessWaitSeconds);
       }
       if (message.payload.oauthFlowTimeoutEnabled !== undefined && typeof inputOAuthFlowTimeoutEnabled !== 'undefined' && inputOAuthFlowTimeoutEnabled) {
         inputOAuthFlowTimeoutEnabled.checked = Boolean(message.payload.oauthFlowTimeoutEnabled);

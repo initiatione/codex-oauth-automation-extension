@@ -433,7 +433,7 @@ node --test tests/five-sim-provider.test.js tests/phone-verification-flow.test.j
 | `background.js` | 持久化 `step6RegistrationSuccessWaitSeconds`，规范化 `0~300` 秒，并在 Step 6 执行前读取最新配置。 |
 | `background/steps/wait-registration-success.js` | Step 6 执行器，支持传入动态等待毫秒值。 |
 | `sidepanel/sidepanel.html` | “第6步等待”输入框。 |
-| `sidepanel/sidepanel.js` | 输入保存、回显、DATA_UPDATED 同步和自动运行锁定。 |
+| `sidepanel/sidepanel.js` | 输入保存、回显、DATA_UPDATED 同步、编辑中输入保护和自动运行锁定。 |
 | `tests/background-step6-retry-limit.test.js` | Step 6 默认等待和动态等待测试。 |
 | `tests/background-account-history-settings.test.js` | 持久化配置规范化测试。 |
 | `tests/sidepanel-step6-registration-wait-settings.test.js` | 侧边栏输入、保存、回显和锁定测试。 |
@@ -442,7 +442,8 @@ node --test tests/five-sim-provider.test.js tests/phone-verification-flow.test.j
 
 1. 默认值为 `20` 秒，允许 `0~300` 秒，`0` 表示不额外等待。
 2. 后台必须在每次执行 Step 6 前读取最新持久化配置，不能只在 service worker 初始化时固定一次。
-3. 自动运行中输入框需要锁定，暂停或停止后再允许修改。
+3. 前端同步后台 `DATA_UPDATED` 时必须保留正在编辑的输入值，避免用户刚填的新秒数被旧状态覆盖。
+4. 已计划或自动运行中输入框需要锁定，暂停或停止后再允许修改。
 
 ### 验证
 
