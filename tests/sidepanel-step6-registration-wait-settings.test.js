@@ -52,7 +52,9 @@ function extractFunction(name) {
 test('sidepanel exposes configurable step 6 registration wait in delay settings', () => {
   assert.match(html, /id="row-step6-registration-success-wait-seconds"/);
   assert.match(html, /id="input-step6-registration-success-wait-seconds"/);
-  assert.match(html, /<span class="setting-caption">第6步等待<\/span>/);
+  assert.match(html, /id="row-step6-registration-success-wait-seconds"[\s\S]*<span class="data-label">第6步<\/span>/);
+  assert.match(html, /<span class="setting-caption">注册成功等待<\/span>/);
+  assert.doesNotMatch(html, /<span class="setting-caption">第6步等待<\/span>/);
 
   const inputTag = html.match(/<input[^>]*id="input-step6-registration-success-wait-seconds"[^>]*>/)?.[0] || '';
   assert.match(inputTag, /type="number"/);
